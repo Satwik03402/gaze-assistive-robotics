@@ -1,0 +1,222 @@
+<?xml version="1.0"?>
+<robot name="two_link_robot">
+
+  <!-- ========================= -->
+  <!-- Base Link -->
+  <!-- ========================= -->
+
+<link name="base_link">
+
+  <!-- ========================= -->
+  <!-- VISUAL -->
+  <!-- ========================= -->
+
+  <visual>
+    <origin xyz="0 0 0.05"/>
+    
+    <geometry>
+      <box size="0.4 0.4 0.1"/>
+    </geometry>
+
+    <material name="blue">
+      <color rgba="0.1 0.2 0.8 1.0"/>
+    </material>
+  </visual>
+
+  <!-- ========================= -->
+  <!-- COLLISION -->
+  <!-- ========================= -->
+
+  <collision>
+    <origin xyz="0 0 0.05"/>
+
+    <geometry>
+      <box size="0.4 0.4 0.1"/>
+    </geometry>
+  </collision>
+
+  <!-- ========================= -->
+  <!-- INERTIAL -->
+  <!-- ========================= -->
+
+  <inertial>
+
+    <origin xyz="0 0 0.05"/>
+
+    <mass value="2.0"/>
+
+    <inertia
+      ixx="0.1"
+      ixy="0.0"
+      ixz="0.0"
+      iyy="0.1"
+      iyz="0.0"
+      izz="0.1"/>
+  </inertial>
+
+</link>
+
+  <!-- ========================= -->
+  <!-- Link 1 -->
+  <!-- ========================= -->
+
+<link name="link_1">
+
+  <!-- VISUAL -->
+
+  <visual>
+    <origin xyz="0 0 0.5"/>
+
+    <geometry>
+      <cylinder radius="0.1" length="1.0"/>
+    </geometry>
+
+    <material name="green">
+      <color rgba="0.1 0.8 0.2 1.0"/>
+    </material>
+  </visual>
+
+  <!-- COLLISION -->
+
+  <collision>
+    <origin xyz="0 0 0.5"/>
+
+    <geometry>
+      <cylinder radius="0.1" length="1.0"/>
+    </geometry>
+  </collision>
+
+  <!-- INERTIAL -->
+
+  <inertial>
+
+    <origin xyz="0 0 0.5"/>
+
+    <mass value="1.5"/>
+
+    <inertia
+      ixx="0.1"
+      ixy="0.0"
+      ixz="0.0"
+      iyy="0.1"
+      iyz="0.0"
+      izz="0.02"/>
+  </inertial>
+
+</link>
+
+  <!-- ========================= -->
+  <!-- Link 2 -->
+  <!-- ========================= -->
+
+<link name="link_2">
+
+  <!-- VISUAL -->
+
+  <visual>
+    <origin xyz="0 0 0.4"/>
+
+    <geometry>
+      <cylinder radius="0.08" length="0.8"/>
+    </geometry>
+
+    <material name="orange">
+      <color rgba="1.0 0.5 0.1 1.0"/>
+    </material>
+  </visual>
+
+  <!-- COLLISION -->
+
+  <collision>
+    <origin xyz="0 0 0.4"/>
+
+    <geometry>
+      <cylinder radius="0.08" length="0.8"/>
+    </geometry>
+  </collision>
+
+  <!-- INERTIAL -->
+
+  <inertial>
+
+    <origin xyz="0 0 0.4"/>
+
+    <mass value="1.0"/>
+
+    <inertia
+      ixx="0.05"
+      ixy="0.0"
+      ixz="0.0"
+      iyy="0.05"
+      iyz="0.0"
+      izz="0.01"/>
+  </inertial>
+
+</link>
+
+  <!-- ========================= -->
+  <!-- Joint 1 -->
+  <!-- ========================= -->
+
+  <joint name="joint_1" type="revolute">
+
+    <parent link="base_link"/>
+    <child link="link_1"/>
+
+    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+
+    <axis xyz="0 1 0"/>
+
+    <limit
+      lower="-1.57"
+      upper="1.57"
+      effort="10"
+      velocity="1.0"/>
+  </joint>
+
+  <!-- ========================= -->
+  <!-- Joint 2 -->
+  <!-- ========================= -->
+
+  <joint name="joint_2" type="revolute">
+
+    <parent link="link_1"/>
+    <child link="link_2"/>
+
+    <origin xyz="0 0 1.0" rpy="0 0 0"/>
+
+    <axis xyz="0 1 0"/>
+
+    <limit
+      lower="-1.57"
+      upper="1.57"
+      effort="10"
+      velocity="1.0"/>
+  </joint>
+
+  <gazebo>
+    <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
+      <parameters>/home/sri/summer_robotics_ws/src/summer_robotics/config/controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+  
+    <ros2_control name="GazeboSystem" type="system">
+    <hardware>
+      <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+    </hardware>
+
+    <joint name="joint_1">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <joint name="joint_2">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+  
+  
+</robot>
