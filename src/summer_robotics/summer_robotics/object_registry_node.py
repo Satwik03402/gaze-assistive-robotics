@@ -11,22 +11,7 @@ class ObjectRegistryNode(Node):
     def __init__(self):
         super().__init__("object_registry_node")
 
-        self.objects = {
-            1: {
-                "label": "red_cube",
-                "pose": [0.9, -0.25, 0.48],
-                "bbox": [320.0, 220.0, 80.0, 80.0],
-                "pickable": True,
-                "status": "ACTIVE"
-            },
-            2: {
-                "label": "blue_cube",
-                "pose": [0.9, 0.25, 0.48],
-                "bbox": [460.0, 220.0, 80.0, 80.0],
-                "pickable": True,
-                "status": "ACTIVE"
-            }
-        }
+        self.objects = {}
 
         self.get_object_service = self.create_service(
             GetObjectById,

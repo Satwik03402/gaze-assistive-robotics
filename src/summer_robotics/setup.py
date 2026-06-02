@@ -36,6 +36,7 @@ setup(
         	'object_selector = summer_robotics.object_selector:main',
         	'task_planner = summer_robotics.task_planner:main',
         	'object_registry_node = summer_robotics.object_registry_node:main',
+        	'fake_perception_node = summer_robotics.fake_perception_node:main',
         ],
     },
 )
