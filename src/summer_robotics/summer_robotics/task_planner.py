@@ -58,10 +58,7 @@ class TaskPlanner(Node):
             "/get_object_by_id"
         )
 
-        self.state_timer = self.create_timer(
-            0.2,
-            self.run_state_machine
-        )
+        self.state_timer = self.create_timer(0.2, self.run_state_machine)
 
         self.get_logger().info("Task Planner started.")
         self.get_logger().info(f"Current state: {self.current_state}")
@@ -81,12 +78,8 @@ class TaskPlanner(Node):
 
         self.current_state = "MOVING_TO_OBJECT"
 
-        self.get_logger().info(
-            f"Selected object ID stored: {self.selected_object_id}"
-        )
-        self.get_logger().info(
-            f"Auto-starting task for object ID: {self.selected_object_id}"
-        )
+        self.get_logger().info(f"Selected object ID stored: {self.selected_object_id}")
+        self.get_logger().info(f"Auto-starting task for object ID: {self.selected_object_id}")
 
     def joint_state_callback(self, msg):
         for name, position in zip(msg.name, msg.position):
@@ -107,10 +100,7 @@ class TaskPlanner(Node):
         self.lookup_future = self.object_lookup_client.call_async(request)
         self.lookup_in_progress = True
 
-        self.get_logger().info(
-            f"Requested object lookup for ID: {self.selected_object_id}"
-        )
-
+        self.get_logger().info(f"Requested object lookup for ID: {self.selected_object_id}")
         return True
 
     def send_joint_goal(self, joint_names, positions):
@@ -122,10 +112,9 @@ class TaskPlanner(Node):
         point.time_from_start.sec = 2
 
         traj_msg.points.append(point)
-
         self.trajectory_pub.publish(traj_msg)
-        self.active_target = positions
 
+        self.active_target = positions
         self.get_logger().info(f"Sent joint goal: {positions}")
 
     def has_reached_target(self):
@@ -158,6 +147,10 @@ class TaskPlanner(Node):
         self.current_state = "IDLE"
         self.get_logger().info("State: IDLE")
 
+    def cancel_task_due_to_object_loss(self):
+        self.get_logger().warn("Selected object is no longer available. Cancelling task.")
+        self.reset_task()
+
     def run_state_machine(self):
         if self.current_state == "IDLE":
             return
@@ -166,14 +159,9 @@ class TaskPlanner(Node):
             if not self.goal_sent:
                 if not self.lookup_in_progress and self.current_object_info is None:
                     started = self.start_object_lookup()
-
                     if not started:
-                        self.get_logger().warn(
-                            "Could not start object lookup. Returning to IDLE."
-                        )
+                        self.get_logger().warn("Could not start object lookup. Returning to IDLE.")
                         self.reset_task()
-                        return
-
                     return
 
                 if self.lookup_in_progress:
@@ -184,15 +172,21 @@ class TaskPlanner(Node):
                     self.lookup_future = None
                     self.lookup_in_progress = False
 
-                    if (
-                        not response.success
-                        or not response.pickable
-                        or response.status != "ACTIVE"
-                    ):
+                    if not response.success:
+                        self.get_logger().warn("Object lookup failed.")
+                        self.cancel_task_due_to_object_loss()
+                        return
+
+                    if not response.pickable:
+                        self.get_logger().warn("Selected object is not pickable.")
+                        self.cancel_task_due_to_object_loss()
+                        return
+
+                    if response.status != "ACTIVE":
                         self.get_logger().warn(
-                            "Object lookup failed or object not available."
+                            f"Selected object status is {response.status}. Cannot continue."
                         )
-                        self.reset_task()
+                        self.cancel_task_due_to_object_loss()
                         return
 
                     self.current_object_info = response
@@ -208,8 +202,7 @@ class TaskPlanner(Node):
                     target = self.blue_cube_reach_pose
                 else:
                     self.get_logger().warn(
-                        f"No reach pose mapped for object label: "
-                        f"{self.current_object_info.label}"
+                        f"No reach pose mapped for object label: {self.current_object_info.label}"
                     )
                     self.reset_task()
                     return
@@ -278,9 +271,7 @@ class TaskPlanner(Node):
                 self.get_logger().info("State: TASK_COMPLETE")
 
         if self.current_state == "TASK_COMPLETE":
-            self.get_logger().info(
-                f"Task complete for: {self.selected_object_id}"
-            )
+            self.get_logger().info(f"Task complete for: {self.selected_object_id}")
             self.reset_task()
 
 
@@ -288,7 +279,6 @@ def main(args=None):
     rclpy.init(args=args)
 
     node = TaskPlanner()
-
     rclpy.spin(node)
 
     node.destroy_node()
