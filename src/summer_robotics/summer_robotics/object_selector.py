@@ -4,8 +4,7 @@ import threading
 
 import rclpy
 from rclpy.node import Node
-
-from std_msgs.msg import String
+from std_msgs.msg import Int32
 
 
 class ObjectSelector(Node):
@@ -15,8 +14,8 @@ class ObjectSelector(Node):
         super().__init__("object_selector")
 
         self.publisher_ = self.create_publisher(
-            String,
-            "/selected_object",
+            Int32,
+            "/selected_object_id",
             10
         )
 
@@ -47,15 +46,15 @@ class ObjectSelector(Node):
                 "\nSelect Object (1=Red, 2=Blue): "
             )
 
-            msg = String()
+            msg = Int32()
 
             if user_input == "1":
 
-                msg.data = "red_cube"
+                msg.data = 1
 
             elif user_input == "2":
 
-                msg.data = "blue_cube"
+                msg.data = 2
 
             else:
 
