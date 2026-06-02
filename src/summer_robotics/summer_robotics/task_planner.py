@@ -27,6 +27,8 @@ class TaskPlanner(Node):
 
         self.lookup_future = None
         self.lookup_in_progress = False
+        self.lookup_retry_start_time = None
+        self.lookup_timeout_sec = 5.0
 
         self.home_pose = [0.0, 0.0]
         self.red_cube_reach_pose = [0.7, -0.8]
@@ -71,6 +73,7 @@ class TaskPlanner(Node):
             return
 
         self.selected_object_id = msg.data
+        self.lookup_retry_start_time = self.get_clock().now()
         self.current_object_info = None
         self.lookup_future = None
         self.lookup_in_progress = False
@@ -173,7 +176,21 @@ class TaskPlanner(Node):
                     self.lookup_in_progress = False
 
                     if not response.success:
-                        self.get_logger().warn("Object lookup failed.")
+                        elapsed = (
+                            self.get_clock().now()
+                            - self.lookup_retry_start_time
+                        ).nanoseconds / 1e9
+
+                        if elapsed < self.lookup_timeout_sec:
+                            self.get_logger().info(
+                                f"Object not found yet. Retrying... ({elapsed:.1f}s)"
+                            )
+                            self.start_object_lookup()
+                            return
+
+                        self.get_logger().warn(
+                            "Object could not be discovered within timeout."
+                        )
                         self.cancel_task_due_to_object_loss()
                         return
 
