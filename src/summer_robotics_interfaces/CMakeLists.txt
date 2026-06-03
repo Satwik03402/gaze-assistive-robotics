@@ -10,6 +10,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetAvailableObjects.srv"
   "msg/DetectedObject.msg"
   "msg/DetectedObjectArray.msg"
+  "msg/RobotCommand.msg"
   DEPENDENCIES std_msgs
 )
 

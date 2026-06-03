@@ -6,6 +6,15 @@ from std_msgs.msg import Int32
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from summer_robotics_interfaces.srv import GetObjectById
+from summer_robotics_interfaces.msg import RobotCommand
+
+from summer_robotics.robot_commands import (
+    MOVE_TO_OBJECT,
+    PICK,
+    MOVE_TO_PLACE,
+    PLACE,
+    HOME
+)
 
 
 class TaskPlanner(Node):
@@ -64,6 +73,11 @@ class TaskPlanner(Node):
 
         self.get_logger().info("Task Planner started.")
         self.get_logger().info(f"Current state: {self.current_state}")
+        self.robot_command_pub = self.create_publisher(
+            RobotCommand,
+            "/robot_command",
+            10
+        )
 
     def selected_object_id_callback(self, msg):
         if self.current_state != "IDLE":
@@ -119,6 +133,30 @@ class TaskPlanner(Node):
 
         self.active_target = positions
         self.get_logger().info(f"Sent joint goal: {positions}")
+    
+    def send_robot_command(self, command, object_info=None):
+        msg = RobotCommand()
+        msg.command = command
+
+        if object_info is not None:
+            msg.object_id = self.selected_object_id
+            msg.x = object_info.pose[0]
+            msg.y = object_info.pose[1]
+            msg.z = object_info.pose[2]
+        else:
+            msg.object_id = 0
+            msg.x = 0.0
+            msg.y = 0.0
+            msg.z = 0.0
+
+        msg.qx = 0.0
+        msg.qy = 0.0
+        msg.qz = 0.0
+        msg.qw = 1.0
+
+        self.robot_command_pub.publish(msg)
+
+        self.get_logger().info(f"Sent robot command: {command}")
 
     def has_reached_target(self):
         if self.active_target is None:
@@ -224,7 +262,8 @@ class TaskPlanner(Node):
                     self.reset_task()
                     return
 
-                self.send_joint_goal(["joint_1", "joint_2"], target)
+                self.send_robot_command(MOVE_TO_OBJECT, self.current_object_info)
+                self.active_target = target
                 self.goal_sent = True
                 self.get_logger().info("State: MOVING_TO_OBJECT")
                 return
@@ -250,7 +289,8 @@ class TaskPlanner(Node):
 
         if self.current_state == "MOVING_TO_PLACE_ZONE":
             if not self.goal_sent:
-                self.send_joint_goal(["joint_1", "joint_2"], self.place_pose)
+                self.send_robot_command(MOVE_TO_PLACE)
+                self.active_target = self.place_pose
                 self.goal_sent = True
                 self.get_logger().info("State: MOVING_TO_PLACE_ZONE")
                 return
@@ -276,7 +316,8 @@ class TaskPlanner(Node):
 
         if self.current_state == "RETURNING_HOME":
             if not self.goal_sent:
-                self.send_joint_goal(["joint_1", "joint_2"], self.home_pose)
+                self.send_robot_command(HOME)
+                self.active_target = self.home_pose
                 self.goal_sent = True
                 self.get_logger().info("State: RETURNING_HOME")
                 return
