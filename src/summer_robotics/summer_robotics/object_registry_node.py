@@ -5,6 +5,7 @@ from rclpy.node import Node
 
 from summer_robotics_interfaces.srv import GetObjectById
 from summer_robotics_interfaces.msg import DetectedObjectArray
+from summer_robotics_interfaces.srv import GetAvailableObjects
 
 class ObjectRegistryNode(Node):
 
@@ -19,6 +20,12 @@ class ObjectRegistryNode(Node):
             self.get_object_by_id_callback
         )
 
+        self.get_available_objects_service = self.create_service(
+            GetAvailableObjects,
+            "get_available_objects",
+            self.get_available_objects_callback
+        )
+
         self.detected_objects_sub = self.create_subscription(
             DetectedObjectArray,
             "/detected_objects",
@@ -27,7 +34,8 @@ class ObjectRegistryNode(Node):
         )
 
         self.get_logger().info("Object Registry Node started.")
-        self.object_timeout_sec = 3.0
+        self.temp_lost_timeout_sec = 3.0
+        self.lost_timeout_sec = 10.0
         self.registry_timer = self.create_timer(0.5, self.update_object_statuses)
 
     def get_object_by_id_callback(self, request, response):
@@ -78,6 +86,26 @@ class ObjectRegistryNode(Node):
                 f"Updated object ID {object_id}: {detected_object.label}"
             )
 
+    def get_available_objects_callback(
+        self,
+        request,
+        response
+    ):
+
+        for object_id, obj in self.objects.items():
+
+            response.ids.append(object_id)
+
+            response.labels.append(
+                obj["label"]
+            )
+
+            response.statuses.append(
+                obj["status"]
+            )
+
+        return response
+
     def update_object_statuses(self):
         now = self.get_clock().now()
 
@@ -89,7 +117,10 @@ class ObjectRegistryNode(Node):
                 now - obj["last_seen_time"]
             ).nanoseconds / 1e9
 
-            if elapsed_time > self.object_timeout_sec:
+            if elapsed_time > self.lost_timeout_sec:
+                obj["status"] = "LOST"
+
+            elif elapsed_time > self.temp_lost_timeout_sec:
                 obj["status"] = "TEMP_LOST"
 
 def main(args=None):

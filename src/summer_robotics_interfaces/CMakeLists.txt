@@ -7,6 +7,7 @@ find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetObjectById.srv"
+  "srv/GetAvailableObjects.srv"
   "msg/DetectedObject.msg"
   "msg/DetectedObjectArray.msg"
   DEPENDENCIES std_msgs
