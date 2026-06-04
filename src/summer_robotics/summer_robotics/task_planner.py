@@ -3,8 +3,6 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Int32
-from sensor_msgs.msg import JointState
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from summer_robotics_interfaces.srv import GetObjectById
 from summer_robotics_interfaces.msg import RobotCommand
 from summer_robotics_interfaces.msg import RobotStatus
@@ -26,12 +24,9 @@ class TaskPlanner(Node):
         self.current_state = "IDLE"
         self.object_attached = False
 
-        self.current_joint_positions = {}
-        self.active_target = None
         self.current_object_info = None
 
         self.goal_sent = False
-        self.position_tolerance = 0.03
         self.state_start_time = None
         self.simulated_action_duration = 1.0
 
@@ -40,28 +35,10 @@ class TaskPlanner(Node):
         self.lookup_retry_start_time = None
         self.lookup_timeout_sec = 5.0
 
-        self.home_pose = [0.0, 0.0]
-        self.red_cube_reach_pose = [0.7, -0.8]
-        self.blue_cube_reach_pose = [0.7, 0.8]
-        self.place_pose = [1.0, 0.0]
-
         self.selected_object_sub = self.create_subscription(
             Int32,
             "/selected_object_id",
             self.selected_object_id_callback,
-            10
-        )
-
-        self.joint_state_sub = self.create_subscription(
-            JointState,
-            "/joint_states",
-            self.joint_state_callback,
-            10
-        )
-
-        self.trajectory_pub = self.create_publisher(
-            JointTrajectory,
-            "/arm_controller/joint_trajectory",
             10
         )
 
@@ -122,10 +99,6 @@ class TaskPlanner(Node):
         self.get_logger().info(f"Selected object ID stored: {self.selected_object_id}")
         self.get_logger().info(f"Auto-starting task for object ID: {self.selected_object_id}")
 
-    def joint_state_callback(self, msg):
-        for name, position in zip(msg.name, msg.position):
-            self.current_joint_positions[name] = position
-
     def start_object_lookup(self):
         if self.selected_object_id is None:
             self.get_logger().warn("No selected object ID to look up.")
@@ -144,20 +117,6 @@ class TaskPlanner(Node):
         self.get_logger().info(f"Requested object lookup for ID: {self.selected_object_id}")
         return True
 
-    def send_joint_goal(self, joint_names, positions):
-        traj_msg = JointTrajectory()
-        traj_msg.joint_names = joint_names
-
-        point = JointTrajectoryPoint()
-        point.positions = positions
-        point.time_from_start.sec = 2
-
-        traj_msg.points.append(point)
-        self.trajectory_pub.publish(traj_msg)
-
-        self.active_target = positions
-        self.get_logger().info(f"Sent joint goal: {positions}")
-    
     def send_robot_command(self, command, object_info=None):
         msg = RobotCommand()
         msg.command = command
@@ -186,27 +145,8 @@ class TaskPlanner(Node):
         self.robot_command_done = False
         self.robot_command_failed = False
 
-    def has_reached_target(self):
-        if self.active_target is None:
-            return False
-
-        required_joints = ["joint_1", "joint_2"]
-
-        for joint_name, target_position in zip(required_joints, self.active_target):
-            if joint_name not in self.current_joint_positions:
-                return False
-
-            current_position = self.current_joint_positions[joint_name]
-            error = abs(current_position - target_position)
-
-            if error > self.position_tolerance:
-                return False
-
-        return True
-
     def reset_task(self):
         self.selected_object_id = None
-        self.active_target = None
         self.current_object_info = None
         self.object_attached = False
         self.goal_sent = False
@@ -222,6 +162,11 @@ class TaskPlanner(Node):
 
     def run_state_machine(self):
         if self.current_state == "IDLE":
+            return
+
+        if self.robot_command_failed:
+            self.get_logger().warn("Robot command failed. Cancelling task.")
+            self.reset_task()
             return
 
         if self.current_state == "MOVING_TO_OBJECT":
@@ -279,24 +224,12 @@ class TaskPlanner(Node):
                         f"label={response.label}, pose={list(response.pose)}"
                     )
 
-                if self.current_object_info.label == "red_cube":
-                    target = self.red_cube_reach_pose
-                elif self.current_object_info.label == "blue_cube":
-                    target = self.blue_cube_reach_pose
-                else:
-                    self.get_logger().warn(
-                        f"No reach pose mapped for object label: {self.current_object_info.label}"
-                    )
-                    self.reset_task()
-                    return
-
                 self.send_robot_command(MOVE_TO_OBJECT, self.current_object_info)
-                self.active_target = target
                 self.goal_sent = True
                 self.get_logger().info("State: MOVING_TO_OBJECT")
                 return
 
-            if self.has_reached_target():
+            if self.robot_command_done:
                 self.get_logger().info("Reached selected object.")
                 self.current_state = "PICK_OBJECT"
                 self.goal_sent = False
@@ -318,12 +251,11 @@ class TaskPlanner(Node):
         if self.current_state == "MOVING_TO_PLACE_ZONE":
             if not self.goal_sent:
                 self.send_robot_command(MOVE_TO_PLACE)
-                self.active_target = self.place_pose
                 self.goal_sent = True
                 self.get_logger().info("State: MOVING_TO_PLACE_ZONE")
                 return
 
-            if self.has_reached_target():
+            if self.robot_command_done:
                 self.get_logger().info("Reached place zone.")
                 self.current_state = "DROP_OBJECT"
                 self.goal_sent = False
@@ -345,12 +277,11 @@ class TaskPlanner(Node):
         if self.current_state == "RETURNING_HOME":
             if not self.goal_sent:
                 self.send_robot_command(HOME)
-                self.active_target = self.home_pose
                 self.goal_sent = True
                 self.get_logger().info("State: RETURNING_HOME")
                 return
 
-            if self.has_reached_target():
+            if self.robot_command_done:
                 self.get_logger().info("Returned home.")
                 self.current_state = "TASK_COMPLETE"
                 self.goal_sent = False
