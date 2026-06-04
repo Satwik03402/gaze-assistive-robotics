@@ -7,6 +7,7 @@ from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from summer_robotics_interfaces.srv import GetObjectById
 from summer_robotics_interfaces.msg import RobotCommand
+from summer_robotics_interfaces.msg import RobotStatus
 
 from summer_robotics.robot_commands import (
     MOVE_TO_OBJECT,
@@ -78,6 +79,29 @@ class TaskPlanner(Node):
             "/robot_command",
             10
         )
+
+        self.waiting_for_robot = False
+        self.robot_command_done = False
+        self.robot_command_failed = False
+        self.expected_robot_command = None
+        self.robot_status_sub = self.create_subscription(
+            RobotStatus,
+            "/robot_status",
+            self.robot_status_callback,
+            10
+        )
+
+    def robot_status_callback(self, msg):
+        if self.expected_robot_command != msg.current_command:
+            return
+
+        if msg.status == "DONE" and msg.success:
+            self.robot_command_done = True
+            self.waiting_for_robot = False
+
+        elif msg.status == "FAILED":
+            self.robot_command_failed = True
+            self.waiting_for_robot = False
 
     def selected_object_id_callback(self, msg):
         if self.current_state != "IDLE":
@@ -157,6 +181,10 @@ class TaskPlanner(Node):
         self.robot_command_pub.publish(msg)
 
         self.get_logger().info(f"Sent robot command: {command}")
+        self.expected_robot_command = command
+        self.waiting_for_robot = True
+        self.robot_command_done = False
+        self.robot_command_failed = False
 
     def has_reached_target(self):
         if self.active_target is None:
