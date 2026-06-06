@@ -99,6 +99,17 @@ class ColorPerceptionNode(Node):
             blue_lower,
             blue_upper
         )
+    
+    def detect_green_object(self, hsv_image):
+        green_lower = np.array([40, 100, 50])
+        green_upper = np.array([90, 255, 255])
+
+        return self.detect_color_object(
+            hsv_image,
+            "green_cube",
+            green_lower,
+            green_upper
+        )
 
     def create_detected_object(self, object_id, label, world_pose, bbox):
         obj = DetectedObject()
@@ -135,8 +146,8 @@ class ColorPerceptionNode(Node):
 
         red_detections = self.detect_red_object(hsv_image)
         blue_detections = self.detect_blue_object(hsv_image)
-
-        all_detections = red_detections + blue_detections
+        green_detections = self.detect_green_object(hsv_image)
+        all_detections = red_detections + blue_detections  + green_detections
 
         detected_msg = DetectedObjectArray()
         detected_msg.header.stamp = self.get_clock().now().to_msg()
@@ -161,6 +172,16 @@ class ColorPerceptionNode(Node):
                     2,
                     "blue_cube",
                     [0.9, 0.25, 0.48],
+                    bbox
+                )
+
+                detected_msg.objects.append(detected_object)
+
+            elif label == "green_cube":
+                detected_object = self.create_detected_object(
+                    3,
+                    "green_cube",
+                    [0.8, 0.0, 0.48],
                     bbox
                 )
 
