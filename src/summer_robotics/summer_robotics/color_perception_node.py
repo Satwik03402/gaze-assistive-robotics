@@ -5,8 +5,8 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
-
 from sensor_msgs.msg import Image
+from summer_robotics_interfaces.msg import DetectedObject, DetectedObjectArray
 from cv_bridge import CvBridge
 
 
@@ -22,6 +22,12 @@ class ColorPerceptionNode(Node):
             Image,
             "/overhead_camera/overhead_camera/image_raw",
             self.image_callback,
+            10
+        )
+
+        self.detection_pub = self.create_publisher(
+            DetectedObjectArray,
+            "/detected_objects",
             10
         )
 
@@ -94,6 +100,28 @@ class ColorPerceptionNode(Node):
             blue_upper
         )
 
+    def create_detected_object(self, object_id, label, world_pose, bbox):
+        obj = DetectedObject()
+
+        obj.id = object_id
+        obj.label = label
+
+        obj.x = world_pose[0]
+        obj.y = world_pose[1]
+        obj.z = world_pose[2]
+
+        obj.bbox = [
+            float(bbox[0]),
+            float(bbox[1]),
+            float(bbox[2]),
+            float(bbox[3])
+        ]
+
+        obj.pickable = True
+        obj.status = "ACTIVE"
+
+        return obj
+
     def image_callback(self, msg):
         cv_image = self.bridge.imgmsg_to_cv2(
             msg,
@@ -110,6 +138,35 @@ class ColorPerceptionNode(Node):
 
         all_detections = red_detections + blue_detections
 
+        detected_msg = DetectedObjectArray()
+        detected_msg.header.stamp = self.get_clock().now().to_msg()
+        detected_msg.header.frame_id = "overhead_camera_frame"
+
+        for detection in all_detections:
+            label = detection["color"]
+            bbox = detection["bbox"]
+
+            if label == "red_cube":
+                detected_object = self.create_detected_object(
+                    1,
+                    "red_cube",
+                    [0.9, -0.25, 0.48],
+                    bbox
+                )
+
+                detected_msg.objects.append(detected_object)
+
+            elif label == "blue_cube":
+                detected_object = self.create_detected_object(
+                    2,
+                    "blue_cube",
+                    [0.9, 0.25, 0.48],
+                    bbox
+                )
+
+                detected_msg.objects.append(detected_object)
+
+        self.detection_pub.publish(detected_msg)
         self.frame_count += 1
 
         if self.frame_count % 100 == 0:
