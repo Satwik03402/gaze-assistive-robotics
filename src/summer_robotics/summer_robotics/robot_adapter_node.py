@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import rclpy
+import math 
 from rclpy.node import Node
 
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -57,6 +58,15 @@ class RobotAdapterNode(Node):
             0.1,
             self.monitor_motion
         )
+        self.link_1_length = 1.0
+        self.link_2_length = 0.8
+        self.base_height = 0.1
+
+        self.joint_1_lower_limit = -1.57
+        self.joint_1_upper_limit = 1.57
+
+        self.joint_2_lower_limit = -2.5
+        self.joint_2_upper_limit = 2.5
 
     def publish_status(self, status, command, object_id, success, message):
         status_msg = RobotStatus()
@@ -72,6 +82,50 @@ class RobotAdapterNode(Node):
         self.get_logger().info(
             f"Robot status: {status} | {command} | {message}"
         )
+
+    def compute_ik(self, target_x, target_z):
+        L1 = self.link_1_length
+        L2 = self.link_2_length
+
+        x = target_x
+        z = target_z - self.base_height
+
+        distance_squared = x * x + z * z
+
+        cos_theta2 = (
+            distance_squared - L1 * L1 - L2 * L2
+        ) / (2.0 * L1 * L2)
+
+        if cos_theta2 < -1.0 or cos_theta2 > 1.0:
+            self.get_logger().warn(
+                f"Target unreachable: x={target_x:.3f}, z={target_z:.3f}, cos_theta2={cos_theta2:.3f}"
+            )
+            return None
+
+        theta2 = math.atan2(
+            math.sqrt(1.0 - cos_theta2 * cos_theta2),
+            cos_theta2
+        )
+
+        theta1 = math.atan2(x, z) - math.atan2(
+            L2 * math.sin(theta2),
+            L1 + L2 * math.cos(theta2)
+        )
+
+        self.get_logger().info(
+            f"IK result: theta1={theta1:.3f}, theta2={theta2:.3f}"
+        )
+
+        if not (
+            self.joint_1_lower_limit <= theta1 <= self.joint_1_upper_limit
+            and self.joint_2_lower_limit <= theta2 <= self.joint_2_upper_limit
+        ):
+            self.get_logger().warn(
+                f"Joint limit violation: theta1={theta1:.3f}, theta2={theta2:.3f}"
+            )
+            return None
+
+        return [theta1, theta2]
 
     def publish_joint_goal(self, positions):
         traj_msg = JointTrajectory()
@@ -108,28 +162,27 @@ class RobotAdapterNode(Node):
             self.active_object_id = msg.object_id
 
         elif msg.command == MOVE_TO_OBJECT:
-            if msg.object_id == 1:
-                self.publish_joint_goal([0.7, -0.8])
-                self.active_command = msg.command
-                self.active_object_id = msg.object_id
-            elif msg.object_id == 2:
-                self.publish_joint_goal([0.7, 0.8])
-                self.active_command = msg.command
-                self.active_object_id = msg.object_id
-                
-            elif msg.object_id == 3:
-                self.publish_joint_goal([0.7, 0.0])
-                self.active_command = msg.command
-                self.active_object_id = msg.object_id
-            else:
-                self.get_logger().warn(f"No joint mapping for object ID: {msg.object_id}")
+            approach_x = msg.x - 0.25
+            approach_z = msg.z + 0.35
+            joint_goal = self.compute_ik(approach_x, approach_z)
+
+            if joint_goal is None:
+                self.get_logger().warn(
+                    f"IK failed for object ID {msg.object_id} at x={msg.x}, z={msg.z}"
+                )
                 self.publish_status(
                     "FAILED",
                     msg.command,
                     msg.object_id,
                     False,
-                    "No joint mapping for object ID"
+                    "IK failed or target unreachable"
                 )
+                return
+
+            self.publish_joint_goal(joint_goal)
+
+            self.active_command = msg.command
+            self.active_object_id = msg.object_id
 
         elif msg.command == PICK:
             self.get_logger().info("Pick action executed.")
