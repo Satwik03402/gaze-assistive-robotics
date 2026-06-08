@@ -60,6 +60,7 @@ class RobotAdapterNode(Node):
         )
         self.link_1_length = 1.0
         self.link_2_length = 0.8
+        self.end_effector_length = 0.15
         self.base_height = 0.1
 
         self.joint_1_lower_limit = -1.57
@@ -164,7 +165,8 @@ class RobotAdapterNode(Node):
         elif msg.command == MOVE_TO_OBJECT:
             approach_x = msg.x - 0.25
             approach_z = msg.z + 0.35
-            joint_goal = self.compute_ik(approach_x, approach_z)
+            wrist_z = approach_z - self.end_effector_length
+            joint_goal = self.compute_ik(approach_x, wrist_z)
 
             if joint_goal is None:
                 self.get_logger().warn(
