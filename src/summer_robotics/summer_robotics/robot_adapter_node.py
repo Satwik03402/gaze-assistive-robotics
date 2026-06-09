@@ -43,6 +43,7 @@ class RobotAdapterNode(Node):
         self.get_logger().info("Robot Adapter started.")
         self.current_joint_positions = {}
         self.active_target = None
+        self.motion_queue = []
         self.active_command = None
         self.active_object_id = 0
         self.position_tolerance = 0.03
@@ -68,7 +69,6 @@ class RobotAdapterNode(Node):
 
         self.joint_2_lower_limit = -2.5
         self.joint_2_upper_limit = 2.5
-        self.end_effector_length = 0.15
 
     def publish_status(self, status, command, object_id, success, message):
         status_msg = RobotStatus()
@@ -160,6 +160,25 @@ class RobotAdapterNode(Node):
         self.get_logger().info(f"Published joint goal: {positions}")
         self.active_target = positions
 
+    def start_motion_sequence(self, command, object_id, joint_goals):
+        self.motion_queue = joint_goals
+
+        self.active_command = command
+        self.active_object_id = object_id
+
+        if len(self.motion_queue) == 0:
+            self.publish_status(
+                "FAILED",
+                command,
+                object_id,
+                False,
+                "No motion goals available"
+            )
+            return
+
+        next_goal = self.motion_queue.pop(0)
+        self.publish_joint_goal(next_goal)
+
     def robot_command_callback(self, msg):
         self.get_logger().info(f"Received command: {msg.command}")
         self.publish_status(
@@ -183,41 +202,51 @@ class RobotAdapterNode(Node):
         elif msg.command == MOVE_TO_OBJECT:
             approach_x = msg.x - 0.25
             approach_z = msg.z + 0.35
-            joint_goal = self.compute_ik(approach_x, approach_z)
 
-            if joint_goal is None:
+            descend_x = msg.x - 0.15
+            descend_z = msg.z + 0.18
+
+            approach_goal = self.compute_ik(approach_x, approach_z)
+            descend_goal = self.compute_ik(descend_x, descend_z)
+
+            if approach_goal is None or descend_goal is None:
                 self.get_logger().warn(
-                    f"IK failed for object ID {msg.object_id} at x={msg.x}, z={msg.z}"
+                    f"IK failed for object ID {msg.object_id}"
                 )
                 self.publish_status(
                     "FAILED",
                     msg.command,
                     msg.object_id,
                     False,
-                    "IK failed or target unreachable"
+                    "IK failed for approach or descend target"
                 )
                 return
-            
-            fk_x, fk_z = self.compute_fk(
-                joint_goal[0],
-                joint_goal[1]
+
+            for name, goal, target_x, target_z in [
+                ("approach", approach_goal, approach_x, approach_z),
+                ("descend", descend_goal, descend_x, descend_z),
+            ]:
+                fk_x, fk_z = self.compute_fk(goal[0], goal[1])
+
+                fk_error = math.sqrt(
+                    (fk_x - target_x) ** 2
+                    + (fk_z - target_z) ** 2
+                )
+
+                self.get_logger().info(
+                    f"{name.upper()} FK target=({target_x:.3f}, {target_z:.3f}) "
+                    f"actual=({fk_x:.3f}, {fk_z:.3f}) "
+                    f"error={fk_error:.3f} m"
+                )
+
+            self.start_motion_sequence(
+                msg.command,
+                msg.object_id,
+                [
+                    approach_goal,
+                    descend_goal
+                ]
             )
-
-            fk_error = math.sqrt(
-                (fk_x - approach_x) ** 2
-                + (fk_z - approach_z) ** 2
-            )
-
-            self.get_logger().info(
-                f"FK target=({approach_x:.3f}, {approach_z:.3f}) "
-                f"actual=({fk_x:.3f}, {fk_z:.3f}) "
-                f"error={fk_error:.3f} m"
-            )
-
-            self.publish_joint_goal(joint_goal)
-
-            self.active_command = msg.command
-            self.active_object_id = msg.object_id
 
         elif msg.command == PICK:
             self.get_logger().info("Pick action executed.")
@@ -260,17 +289,24 @@ class RobotAdapterNode(Node):
             return
 
         if self.has_reached_target():
+            if len(self.motion_queue) > 0:
+                next_goal = self.motion_queue.pop(0)
+                self.get_logger().info("Moving to next queued goal.")
+                self.publish_joint_goal(next_goal)
+                return
+
             self.publish_status(
                 "DONE",
                 self.active_command,
                 self.active_object_id,
                 True,
-                "Motion completed"
+                "Motion sequence completed"
             )
 
             self.active_target = None
             self.active_command = None
             self.active_object_id = 0
+            self.motion_queue = []
 
 def main(args=None):
     rclpy.init(args=args)
