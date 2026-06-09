@@ -148,7 +148,7 @@ class RobotAdapterNode(Node):
 
     def publish_joint_goal(self, positions):
         traj_msg = JointTrajectory()
-        traj_msg.joint_names = ["joint_1", "joint_2"]
+        traj_msg.joint_names = ["joint_0", "joint_1", "joint_2"]
 
         point = JointTrajectoryPoint()
         point.positions = positions
@@ -190,26 +190,33 @@ class RobotAdapterNode(Node):
         )
 
         if msg.command == HOME:
-            self.publish_joint_goal([0.0, 0.0])
+            self.publish_joint_goal([0.0, 0.0, 0.0])
             self.active_command = msg.command
             self.active_object_id = msg.object_id
 
         elif msg.command == MOVE_TO_PLACE:
-            self.publish_joint_goal([1.0, 0.0])
+            self.publish_joint_goal([0.0, 1.0, 0.0])
             self.active_command = msg.command
             self.active_object_id = msg.object_id
 
         elif msg.command == MOVE_TO_OBJECT:
-            approach_x = msg.x - 0.20
+            base_yaw = self.compute_base_yaw(msg.x, msg.y)
+
+            planar_distance = math.sqrt(
+                msg.x * msg.x
+                + msg.y * msg.y
+            )
+
+            approach_x = planar_distance - 0.20
             approach_z = msg.z + 0.25
 
-            descend_x = msg.x - 0.05
+            descend_x = planar_distance - 0.05
             descend_z = msg.z + 0.08
 
-            approach_goal = self.compute_ik(approach_x, approach_z)
-            descend_goal = self.compute_ik(descend_x, descend_z)
+            approach_arm_goal = self.compute_ik(approach_x, approach_z)
+            descend_arm_goal = self.compute_ik(descend_x, descend_z)
 
-            if approach_goal is None or descend_goal is None:
+            if approach_arm_goal is None or descend_arm_goal is None:
                 self.get_logger().warn(
                     f"IK failed for object ID {msg.object_id}"
                 )
@@ -222,11 +229,30 @@ class RobotAdapterNode(Node):
                 )
                 return
 
-            for name, goal, target_x, target_z in [
-                ("approach", approach_goal, approach_x, approach_z),
-                ("descend", descend_goal, descend_x, descend_z),
+            approach_goal = [
+                base_yaw,
+                approach_arm_goal[0],
+                approach_arm_goal[1]
+            ]
+
+            descend_goal = [
+                base_yaw,
+                descend_arm_goal[0],
+                descend_arm_goal[1]
+            ]
+
+            self.get_logger().info(
+                f"Base yaw for object ID {msg.object_id}: {base_yaw:.3f} rad"
+            )
+
+            for name, arm_goal, target_x, target_z in [
+                ("approach", approach_arm_goal, approach_x, approach_z),
+                ("descend", descend_arm_goal, descend_x, descend_z),
             ]:
-                fk_x, fk_z = self.compute_fk(goal[0], goal[1])
+                fk_x, fk_z = self.compute_fk(
+                    arm_goal[0],
+                    arm_goal[1]
+                )
 
                 fk_error = math.sqrt(
                     (fk_x - target_x) ** 2
@@ -269,7 +295,7 @@ class RobotAdapterNode(Node):
         if self.active_target is None:
             return False
 
-        required_joints = ["joint_1", "joint_2"]
+        required_joints = ["joint_0", "joint_1", "joint_2"]
 
         for joint_name, target_position in zip(required_joints, self.active_target):
             if joint_name not in self.current_joint_positions:
@@ -307,6 +333,8 @@ class RobotAdapterNode(Node):
             self.active_command = None
             self.active_object_id = 0
             self.motion_queue = []
+    def compute_base_yaw(self, x, y):
+       return math.atan2(y, x)
 
 def main(args=None):
     rclpy.init(args=args)
