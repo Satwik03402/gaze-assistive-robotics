@@ -68,6 +68,7 @@ class RobotAdapterNode(Node):
 
         self.joint_2_lower_limit = -2.5
         self.joint_2_upper_limit = 2.5
+        self.end_effector_length = 0.15
 
     def publish_status(self, status, command, object_id, success, message):
         status_msg = RobotStatus()
@@ -86,7 +87,7 @@ class RobotAdapterNode(Node):
 
     def compute_ik(self, target_x, target_z):
         L1 = self.link_1_length
-        L2 = self.link_2_length
+        L2 = self.link_2_length + self.end_effector_length
 
         x = target_x
         z = target_z - self.base_height
@@ -128,6 +129,23 @@ class RobotAdapterNode(Node):
 
         return [theta1, theta2]
 
+    def compute_fk(self, theta1, theta2):
+        L1 = self.link_1_length
+        L2 = self.link_2_length + self.end_effector_length
+
+        x = (
+            L1 * math.sin(theta1)
+            + L2 * math.sin(theta1 + theta2)
+        )
+
+        z = (
+            self.base_height
+            + L1 * math.cos(theta1)
+            + L2 * math.cos(theta1 + theta2)
+        )
+
+        return x, z
+
     def publish_joint_goal(self, positions):
         traj_msg = JointTrajectory()
         traj_msg.joint_names = ["joint_1", "joint_2"]
@@ -165,8 +183,7 @@ class RobotAdapterNode(Node):
         elif msg.command == MOVE_TO_OBJECT:
             approach_x = msg.x - 0.25
             approach_z = msg.z + 0.35
-            wrist_z = approach_z - self.end_effector_length
-            joint_goal = self.compute_ik(approach_x, wrist_z)
+            joint_goal = self.compute_ik(approach_x, approach_z)
 
             if joint_goal is None:
                 self.get_logger().warn(
@@ -180,6 +197,22 @@ class RobotAdapterNode(Node):
                     "IK failed or target unreachable"
                 )
                 return
+            
+            fk_x, fk_z = self.compute_fk(
+                joint_goal[0],
+                joint_goal[1]
+            )
+
+            fk_error = math.sqrt(
+                (fk_x - approach_x) ** 2
+                + (fk_z - approach_z) ** 2
+            )
+
+            self.get_logger().info(
+                f"FK target=({approach_x:.3f}, {approach_z:.3f}) "
+                f"actual=({fk_x:.3f}, {fk_z:.3f}) "
+                f"error={fk_error:.3f} m"
+            )
 
             self.publish_joint_goal(joint_goal)
 
