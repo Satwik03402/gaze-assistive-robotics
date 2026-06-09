@@ -200,11 +200,11 @@ class RobotAdapterNode(Node):
             self.active_object_id = msg.object_id
 
         elif msg.command == MOVE_TO_OBJECT:
-            approach_x = msg.x - 0.25
-            approach_z = msg.z + 0.35
+            approach_x = msg.x - 0.20
+            approach_z = msg.z + 0.25
 
-            descend_x = msg.x - 0.15
-            descend_z = msg.z + 0.18
+            descend_x = msg.x - 0.05
+            descend_z = msg.z + 0.08
 
             approach_goal = self.compute_ik(approach_x, approach_z)
             descend_goal = self.compute_ik(descend_x, descend_z)
