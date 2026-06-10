@@ -40,6 +40,7 @@ setup(
         	'robot_adapter_node = summer_robotics.robot_adapter_node:main',
         	'object_visualizer_node = summer_robotics.object_visualizer_node:main',
         	'color_perception_node = summer_robotics.color_perception_node:main',
+        	'visualization_marker_node = summer_robotics.visualization_marker_node:main',
         ],
     },
 )

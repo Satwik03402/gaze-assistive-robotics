@@ -14,6 +14,8 @@
   <depend>trajectory_msgs</depend>
   <depend>summer_robotics_interfaces</depend>
   <depend>visualization_msgs</depend>
+  <depend>gazebo_msgs</depend>
+  <depend>tf2_ros</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
