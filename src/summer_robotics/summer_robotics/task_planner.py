@@ -237,11 +237,13 @@ class TaskPlanner(Node):
                 self.get_logger().info("State: PICK_OBJECT")
 
         if self.current_state == "PICK_OBJECT":
-            elapsed_time = (
-                self.get_clock().now() - self.state_start_time
-            ).nanoseconds / 1e9
+            if not self.goal_sent:
+                self.send_robot_command(PICK, self.current_object_info)
+                self.goal_sent = True
+                self.get_logger().info("State: PICK_OBJECT")
+                return
 
-            if elapsed_time >= self.simulated_action_duration:
+            if self.robot_command_done:
                 self.object_attached = True
                 self.current_state = "MOVING_TO_PLACE_ZONE"
                 self.goal_sent = False
@@ -263,11 +265,13 @@ class TaskPlanner(Node):
                 self.get_logger().info("State: DROP_OBJECT")
 
         if self.current_state == "DROP_OBJECT":
-            elapsed_time = (
-                self.get_clock().now() - self.state_start_time
-            ).nanoseconds / 1e9
+            if not self.goal_sent:
+                self.send_robot_command(PLACE)
+                self.goal_sent = True
+                self.get_logger().info("State: DROP_OBJECT")
+                return
 
-            if elapsed_time >= self.simulated_action_duration:
+            if self.robot_command_done:
                 self.object_attached = False
                 self.current_state = "RETURNING_HOME"
                 self.goal_sent = False

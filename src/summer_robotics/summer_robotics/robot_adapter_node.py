@@ -69,6 +69,9 @@ class RobotAdapterNode(Node):
 
         self.joint_2_lower_limit = -2.5
         self.joint_2_upper_limit = 2.5
+        self.gripper_open_position = 0.04
+        self.gripper_closed_position = 0.0
+        self.current_gripper_position = self.gripper_open_position
 
     def publish_status(self, status, command, object_id, success, message):
         status_msg = RobotStatus()
@@ -148,7 +151,7 @@ class RobotAdapterNode(Node):
 
     def publish_joint_goal(self, positions):
         traj_msg = JointTrajectory()
-        traj_msg.joint_names = ["joint_0", "joint_1", "joint_2"]
+        traj_msg.joint_names = ["joint_0", "joint_1", "joint_2", "gripper_joint"]
 
         point = JointTrajectoryPoint()
         point.positions = positions
@@ -190,12 +193,13 @@ class RobotAdapterNode(Node):
         )
 
         if msg.command == HOME:
-            self.publish_joint_goal([0.0, 0.0, 0.0])
+            self.publish_joint_goal([0.0, 0.0, 0.0, self.gripper_open_position])
+            self.current_gripper_position = self.gripper_open_position
             self.active_command = msg.command
             self.active_object_id = msg.object_id
 
         elif msg.command == MOVE_TO_PLACE:
-            self.publish_joint_goal([0.0, 1.0, 0.0])
+            self.publish_joint_goal([0.0, 1.0, 0.0, self.current_gripper_position])
             self.active_command = msg.command
             self.active_object_id = msg.object_id
 
@@ -210,8 +214,8 @@ class RobotAdapterNode(Node):
             approach_x = planar_distance - 0.20
             approach_z = msg.z + 0.25
 
-            descend_x = planar_distance - 0.05
-            descend_z = msg.z + 0.08
+            descend_x = planar_distance - 0.02
+            descend_z = msg.z + 0.04
 
             approach_arm_goal = self.compute_ik(approach_x, approach_z)
             descend_arm_goal = self.compute_ik(descend_x, descend_z)
@@ -269,18 +273,22 @@ class RobotAdapterNode(Node):
                 msg.command,
                 msg.object_id,
                 [
-                    approach_goal,
-                    descend_goal
+                    self.append_gripper(approach_goal),
+                    self.append_gripper(descend_goal)
                 ]
             )
 
         elif msg.command == PICK:
-            self.get_logger().info("Pick action executed.")
-            self.publish_status("DONE", msg.command, msg.object_id, True, "Command completed")
+            self.get_logger().info("Closing gripper for PICK.")
+            self.close_gripper()
+            self.active_command = msg.command
+            self.active_object_id = msg.object_id
 
         elif msg.command == PLACE:
-            self.get_logger().info("Place action executed.")
-            self.publish_status("DONE", msg.command, msg.object_id, True, "Command completed")
+            self.get_logger().info("Opening gripper for PLACE.")
+            self.open_gripper()
+            self.active_command = msg.command
+            self.active_object_id = msg.object_id
 
         else:
             self.get_logger().warn(f"Unknown robot command: {msg.command}")
@@ -295,7 +303,7 @@ class RobotAdapterNode(Node):
         if self.active_target is None:
             return False
 
-        required_joints = ["joint_0", "joint_1", "joint_2"]
+        required_joints = ["joint_0", "joint_1", "joint_2", "gripper_joint"]
 
         for joint_name, target_position in zip(required_joints, self.active_target):
             if joint_name not in self.current_joint_positions:
@@ -309,6 +317,44 @@ class RobotAdapterNode(Node):
 
         return True
 
+    def append_gripper(self, arm_goal):
+        return [
+            arm_goal[0],
+            arm_goal[1],
+            arm_goal[2],
+            self.current_gripper_position
+        ]
+
+    def open_gripper(self):
+        self.current_gripper_position = self.gripper_open_position
+
+        current_arm = [
+            self.current_joint_positions.get("joint_0", 0.0),
+            self.current_joint_positions.get("joint_1", 0.0),
+            self.current_joint_positions.get("joint_2", 0.0)
+        ]
+
+        self.publish_joint_goal([
+            current_arm[0],
+            current_arm[1],
+            current_arm[2],
+            self.gripper_open_position
+        ])
+
+    def close_gripper(self):
+        self.current_gripper_position = self.gripper_closed_position
+        current_arm = [
+            self.current_joint_positions.get("joint_0", 0.0),
+            self.current_joint_positions.get("joint_1", 0.0),
+            self.current_joint_positions.get("joint_2", 0.0)
+        ]
+
+        self.publish_joint_goal([
+            current_arm[0],
+            current_arm[1],
+            current_arm[2],
+            self.gripper_closed_position
+        ])
 
     def monitor_motion(self):
         if self.active_target is None:
