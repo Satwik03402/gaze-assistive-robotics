@@ -42,6 +42,8 @@ setup(
         	'color_perception_node = summer_robotics.color_perception_node:main',
         	'visualization_marker_node = summer_robotics.visualization_marker_node:main',
         	'fake_gaze_node = summer_robotics.fake_gaze_node:main',
+        	'webcam_gaze_node = summer_robotics.webcam_gaze_node:main',
+        	'gaze_object_selector_node = summer_robotics.gaze_object_selector_node:main',
         ],
     },
 )
