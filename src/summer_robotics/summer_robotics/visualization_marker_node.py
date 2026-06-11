@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 
 from visualization_msgs.msg import Marker
-from geometry_msgs.msg import Point
+from summer_robotics_interfaces.msg import DetectedObjectArray
 
 
 class VisualizationMarkerNode(Node):
@@ -24,6 +24,15 @@ class VisualizationMarkerNode(Node):
         )
 
         self.get_logger().info("Visualization Marker Node started.")
+
+        self.detected_objects = []
+
+        self.object_sub = self.create_subscription(
+            DetectedObjectArray,
+            "/detected_objects",
+            self.detected_objects_callback,
+            10
+        )
 
     def create_sphere_marker(self, marker_id, name, x, y, z, r, g, b):
         marker = Marker()
@@ -53,30 +62,33 @@ class VisualizationMarkerNode(Node):
         return marker
 
     def publish_markers(self):
-        red_object = self.create_sphere_marker(
-            1,
-            "red_cube_target",
-            0.9,
-            -0.25,
-            0.48,
-            1.0,
-            0.0,
-            0.0
-        )
 
-        blue_object = self.create_sphere_marker(
-            2,
-            "blue_cube_target",
-            0.9,
-            0.25,
-            0.48,
-            0.0,
-            0.0,
-            1.0
-        )
+        for obj in self.detected_objects:
+
+            if obj.label.lower() == "red_cube":
+                r, g, b = 1.0, 0.0, 0.0
+
+            elif obj.label.lower() == "blue_cube":
+                r, g, b = 0.0, 0.0, 1.0
+
+            else:
+                r, g, b = 0.0, 1.0, 0.0
+
+            marker = self.create_sphere_marker(
+                obj.id,
+                obj.label,
+                obj.x,
+                obj.y,
+                obj.z,
+                r,
+                g,
+                b
+            )
+
+            self.marker_pub.publish(marker)
 
         place_zone = self.create_sphere_marker(
-            3,
+            1000,
             "place_zone",
             0.5,
             0.0,
@@ -86,13 +98,10 @@ class VisualizationMarkerNode(Node):
             1.0
         )
 
-        for marker in [
-            red_object,
-            blue_object,
-            place_zone
-        ]:
-            self.marker_pub.publish(marker)
+        self.marker_pub.publish(place_zone)
 
+    def detected_objects_callback(self, msg):
+        self.detected_objects = msg.objects
 
 def main(args=None):
     rclpy.init(args=args)
