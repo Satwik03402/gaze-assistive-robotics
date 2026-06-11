@@ -68,17 +68,25 @@ class ObjectRegistryNode(Node):
 
         for detected_object in msg.objects:
             object_id = detected_object.id
+            label = detected_object.label
+            pickable = detected_object.pickable
+            status = detected_object.status
+
+            if label == "green_cube":
+                label = "place_zone"
+                pickable = False
+                status = "STATIC"
 
             self.objects[object_id] = {
-                "label": detected_object.label,
+                "label": label,
                 "pose": [
                     detected_object.x,
                     detected_object.y,
                     detected_object.z
                 ],
                 "bbox": list(detected_object.bbox),
-                "pickable": detected_object.pickable,
-                "status": detected_object.status,
+                "pickable": pickable,
+                "status": status,
                 "last_seen_time": now
             }
 
