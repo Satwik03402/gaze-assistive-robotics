@@ -13,6 +13,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotCommand.msg"
   "msg/RobotStatus.msg"
   "msg/EyeGaze.msg"
+  "msg/VoiceCommand.msg"
+  "msg/ConfirmedIntent.msg"
   DEPENDENCIES std_msgs
 )
 

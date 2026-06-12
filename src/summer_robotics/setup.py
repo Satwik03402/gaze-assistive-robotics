@@ -44,6 +44,8 @@ setup(
         	'fake_gaze_node = summer_robotics.fake_gaze_node:main',
         	'webcam_gaze_node = summer_robotics.webcam_gaze_node:main',
         	'gaze_object_selector_node = summer_robotics.gaze_object_selector_node:main',
+        	'voice_command_node = summer_robotics.voice_command_node:main',
+        	'intent_confirmation_node = summer_robotics.intent_confirmation_node:main',
         ],
     },
 )
