@@ -2,7 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Int32
+from summer_robotics_interfaces.msg import ConfirmedIntent
 from summer_robotics_interfaces.srv import GetObjectById
 from summer_robotics_interfaces.msg import RobotCommand
 from summer_robotics_interfaces.msg import RobotStatus
@@ -35,10 +35,10 @@ class TaskPlanner(Node):
         self.lookup_retry_start_time = None
         self.lookup_timeout_sec = 5.0
 
-        self.selected_object_sub = self.create_subscription(
-            Int32,
-            "/selected_object_id",
-            self.selected_object_id_callback,
+        self.confirmed_intent_sub = self.create_subscription(
+            ConfirmedIntent,
+            "/confirmed_intent",
+            self.confirmed_intent_callback,
             10
         )
 
@@ -80,14 +80,18 @@ class TaskPlanner(Node):
             self.robot_command_failed = True
             self.waiting_for_robot = False
 
-    def selected_object_id_callback(self, msg):
+    def confirmed_intent_callback(self, msg):
         if self.current_state != "IDLE":
             self.get_logger().warn(
                 f"Cannot start new task. Current state: {self.current_state}"
             )
             return
 
-        self.selected_object_id = msg.data
+        if msg.command != "pick":
+            self.get_logger().warn(f"Unsupported confirmed intent: {msg.command}")
+            return
+
+        self.selected_object_id = msg.object_id
         self.lookup_retry_start_time = self.get_clock().now()
         self.current_object_info = None
         self.lookup_future = None
