@@ -42,7 +42,9 @@ def generate_launch_description():
             "--verbose",
             world_path,
             "-s",
-            "libgazebo_ros_factory.so"
+            "libgazebo_ros_factory.so",
+            "-s",
+            "libgazebo_ros_state.so"
         ],
         output="screen"
     )
