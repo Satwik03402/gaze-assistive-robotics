@@ -199,9 +199,41 @@ class RobotAdapterNode(Node):
             self.active_object_id = msg.object_id
 
         elif msg.command == MOVE_TO_PLACE:
-            self.publish_joint_goal([0.0, 1.0, 0.0, self.current_gripper_position])
-            self.active_command = msg.command
-            self.active_object_id = msg.object_id
+            base_yaw = self.compute_base_yaw(msg.x, msg.y)
+
+            planar_distance = math.sqrt(
+                msg.x * msg.x
+                + msg.y * msg.y
+            )
+
+            place_x = planar_distance - 0.05
+            place_z = msg.z + 0.12
+
+            place_arm_goal = self.compute_ik(place_x, place_z)
+
+            if place_arm_goal is None:
+                self.publish_status(
+                    "FAILED",
+                    msg.command,
+                    msg.object_id,
+                    False,
+                    "IK failed for place zone"
+                )
+                return
+
+            place_goal = [
+                base_yaw,
+                place_arm_goal[0],
+                place_arm_goal[1]
+            ]
+
+            self.start_motion_sequence(
+                msg.command,
+                msg.object_id,
+                [
+                    self.append_gripper(place_goal)
+                ]
+            )
 
         elif msg.command == MOVE_TO_OBJECT:
             base_yaw = self.compute_base_yaw(msg.x, msg.y)
