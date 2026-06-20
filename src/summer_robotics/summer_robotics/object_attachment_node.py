@@ -6,6 +6,7 @@ from rclpy.node import Node
 from visualization_msgs.msg import Marker
 from summer_robotics_interfaces.msg import RobotStatus
 from summer_robotics.robot_commands import PICK, PLACE
+from summer_robotics_interfaces.srv import GetObjectById
 
 
 class ObjectAttachmentNode(Node):
@@ -35,6 +36,13 @@ class ObjectAttachmentNode(Node):
         )
 
         self.get_logger().info("Object Attachment Node started.")
+        self.place_zone_id = 3
+        self.place_zone_pose = None
+
+        self.object_lookup_client = self.create_client(
+            GetObjectById,
+            "/get_object_by_id"
+        )
 
     def robot_status_callback(self, msg):
         if msg.status != "DONE" or not msg.success:
@@ -84,10 +92,10 @@ class ObjectAttachmentNode(Node):
 
         return marker
 
-    def create_placed_marker(self):
+    def create_placed_marker(self, x, y, z):
         marker = Marker()
 
-        marker.header.frame_id = "end_effector_link"
+        marker.header.frame_id = "base_link"
         marker.header.stamp = self.get_clock().now().to_msg()
 
         marker.ns = "placed_object"
@@ -95,9 +103,9 @@ class ObjectAttachmentNode(Node):
         marker.type = Marker.CUBE
         marker.action = Marker.ADD
 
-        marker.pose.position.x = 0.5
-        marker.pose.position.y = 0.0
-        marker.pose.position.z = 0.8
+        marker.pose.position.x = x
+        marker.pose.position.y = y
+        marker.pose.position.z = z
         marker.pose.orientation.w = 1.0
 
         marker.scale.x = 0.25
@@ -119,9 +127,34 @@ class ObjectAttachmentNode(Node):
         self.marker_pub.publish(marker)
 
     def publish_placed_marker(self, object_id):
-        marker = self.create_placed_marker()
+        if not self.object_lookup_client.service_is_ready():
+            self.get_logger().warn("Object registry service not ready.")
+            return
+
+        request = GetObjectById.Request()
+        request.object_id = self.place_zone_id
+
+        future = self.object_lookup_client.call_async(request)
+        future.add_done_callback(self.place_zone_lookup_done)
+
+    def place_zone_lookup_done(self, future):
+        response = future.result()
+
+        if not response.success:
+            self.get_logger().warn("Place zone lookup failed for placed marker.")
+            return
+
+        marker = self.create_placed_marker(
+            response.pose[0],
+            response.pose[1],
+            response.pose[2] + 0.07
+        )
+
         self.marker_pub.publish(marker)
 
+        self.get_logger().info(
+            f"Placed marker published at place zone pose: {list(response.pose)}"
+        )
 
 def main(args=None):
     rclpy.init(args=args)
