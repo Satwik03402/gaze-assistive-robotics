@@ -47,6 +47,8 @@ setup(
         	'voice_command_node = summer_robotics.voice_command_node:main',
         	'intent_confirmation_node = summer_robotics.intent_confirmation_node:main',
         	'object_attachment_node = summer_robotics.object_attachment_node:main',
+        	'real_robot_adapter_node = summer_robotics.real_robot_adapter_node:main',
+        	'gazebo_object_controller_node = summer_robotics.gazebo_object_controller_node:main',
         ],
     },
 )
