@@ -7,6 +7,7 @@ from rclpy.node import Node
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from summer_robotics_interfaces.msg import RobotCommand, RobotStatus
 from sensor_msgs.msg import JointState
+from summer_robotics.robot_adapter_base import RobotAdapterBase
 from summer_robotics.robot_commands import (
     MOVE_TO_OBJECT,
     PICK,
@@ -16,7 +17,7 @@ from summer_robotics.robot_commands import (
 )
 
 
-class RobotAdapterNode(Node):
+class RobotAdapterNode(Node, RobotAdapterBase):
 
     def __init__(self):
         super().__init__("robot_adapter")
@@ -413,6 +414,57 @@ class RobotAdapterNode(Node):
             self.motion_queue = []
     def compute_base_yaw(self, x, y):
        return math.atan2(y, x)
+
+    def move_to_pose(self, x, y, z):
+        base_yaw = self.compute_base_yaw(x, y)
+
+        planar_distance = math.sqrt(x * x + y * y)
+
+        target_x = planar_distance
+        target_z = z
+
+        arm_goal = self.compute_ik(target_x, target_z)
+
+        if arm_goal is None:
+            return None
+
+        return [
+            base_yaw,
+            arm_goal[0],
+            arm_goal[1]
+        ]
+
+    def pick(self, object_id):
+        self.close_gripper()
+
+    def place(self, object_id):
+        self.open_gripper()
+
+    def go_home(self):
+        self.publish_joint_goal([
+            0.0,
+            0.0,
+            0.0,
+            self.gripper_open_position
+        ])
+
+    def publish_busy(self, command):
+        self.publish_status(
+            "BUSY",
+            command,
+            self.active_object_id,
+            False,
+            "Executing command"
+        )
+
+    def publish_done(self, command):
+        self.publish_status(
+            "DONE",
+            command,
+            self.active_object_id,
+            True,
+            "Command completed"
+        )
 
 def main(args=None):
     rclpy.init(args=args)
