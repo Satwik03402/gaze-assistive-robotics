@@ -20,18 +20,35 @@ class GazeboObjectControllerNode(Node):
 
         self.get_logger().info("Gazebo Object Controller Node started.")
         self.get_logger().info("Listening for attached/placed object markers.")
+        self.current_attached_pose = None
+        self.current_placed_pose = None
+        self.is_attached = False
 
     def marker_callback(self, msg):
-        if msg.ns not in ["attached_object", "placed_object"]:
-            return
 
-        self.get_logger().info(
-            f"Received object marker: ns={msg.ns}, "
-            f"frame={msg.header.frame_id}, "
-            f"pos=({msg.pose.position.x:.2f}, "
-            f"{msg.pose.position.y:.2f}, "
-            f"{msg.pose.position.z:.2f})"
-        )
+        if msg.ns == "attached_object":
+
+            self.current_attached_pose = msg.pose
+            self.is_attached = True
+
+            self.get_logger().info(
+                f"Attached object updated: "
+                f"({msg.pose.position.x:.2f}, "
+                f"{msg.pose.position.y:.2f}, "
+                f"{msg.pose.position.z:.2f})"
+            )
+
+        elif msg.ns == "placed_object":
+
+            self.current_placed_pose = msg.pose
+            self.is_attached = False
+
+            self.get_logger().info(
+                f"Placed object updated: "
+                f"({msg.pose.position.x:.2f}, "
+                f"{msg.pose.position.y:.2f}, "
+                f"{msg.pose.position.z:.2f})"
+            )
 
 
 def main(args=None):
