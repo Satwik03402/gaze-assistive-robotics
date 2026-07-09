@@ -68,7 +68,7 @@
 
     <!-- Selectable Object 2 -->
     <model name="blue_cube">
-      <pose>0.9 0.25 0.48 0 0 0</pose>
+      <pose>0.9 0.10 0.48 0 0 0</pose>
       <link name="link">
         <inertial>
           <mass>0.2</mass>

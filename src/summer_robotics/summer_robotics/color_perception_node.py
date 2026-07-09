@@ -133,6 +133,12 @@ class ColorPerceptionNode(Node):
 
         return obj
 
+    def pixel_to_world(self, cx, cy):
+        world_x = 0.8 + (cy - 123.0) * (0.10 / 185.0)
+        world_y = -(cx - 320.0) * (0.25 / 86.0)
+
+        return [world_x, world_y, 0.48]
+
     def image_callback(self, msg):
         cv_image = self.bridge.imgmsg_to_cv2(
             msg,
@@ -157,11 +163,18 @@ class ColorPerceptionNode(Node):
             label = detection["color"]
             bbox = detection["bbox"]
 
+            center = detection["center"]
+
+            world_pose = self.pixel_to_world(
+                center[0],
+                center[1]
+            )
+
             if label == "red_cube":
                 detected_object = self.create_detected_object(
                     1,
                     "red_cube",
-                    [0.9, -0.25, 0.48],
+                    world_pose,
                     bbox
                 )
 
@@ -171,7 +184,7 @@ class ColorPerceptionNode(Node):
                 detected_object = self.create_detected_object(
                     2,
                     "blue_cube",
-                    [0.9, 0.25, 0.48],
+                    world_pose,
                     bbox
                 )
 
@@ -181,7 +194,7 @@ class ColorPerceptionNode(Node):
                 detected_object = self.create_detected_object(
                     3,
                     "green_cube",
-                    [0.8, 0.0, 0.48],
+                    world_pose,
                     bbox
                 )
 
@@ -197,8 +210,17 @@ class ColorPerceptionNode(Node):
                 bbox = detection["bbox"]
                 area = detection["area"]
 
+                world_pose = self.pixel_to_world(
+                    center[0],
+                    center[1]
+                )
+
                 self.get_logger().info(
-                    f"Detected {color}: center={center}, bbox={bbox}, area={area:.1f}"
+                    f"Detected {color}: "
+                    f"pixel_center={center}, "
+                    f"world_pose=({world_pose[0]:.3f}, {world_pose[1]:.3f}, {world_pose[2]:.3f}), "
+                    f"bbox={bbox}, "
+                    f"area={area:.1f}"
                 )
 
 

@@ -461,7 +461,7 @@ class TaskPlanner(Node):
 
         if self.current_state == "DROP_OBJECT":
             if not self.goal_sent:
-                self.send_robot_command(PLACE, self.current_object_info)
+                self.send_robot_command(PLACE, self.current_place_zone_info)
                 self.goal_sent = True
                 self.get_logger().info("State: DROP_OBJECT")
                 return
