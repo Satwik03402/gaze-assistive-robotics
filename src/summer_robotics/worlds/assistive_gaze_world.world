@@ -9,7 +9,9 @@
     <include>
       <uri>model://sun</uri>
     </include>
-
+    <plugin
+      name="object_pose_plugin"
+      filename="libobject_pose_plugin.so"/>
     <!-- Table -->
     <model name="assistive_table">
       <static>true</static>
