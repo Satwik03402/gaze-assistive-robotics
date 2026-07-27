@@ -12,6 +12,7 @@
     <plugin
       name="object_pose_plugin"
       filename="libobject_pose_plugin.so"/>
+    </plugin>
     <!-- Table -->
     <model name="assistive_table">
       <static>true</static>
@@ -139,16 +140,15 @@
               <far>10.0</far>
             </clip>
           </camera>
-
-          <plugin name="overhead_camera_controller" filename="libgazebo_ros_camera.so">
-            <ros>
-              <namespace>/overhead_camera</namespace>
-            </ros>
-            <camera_name>overhead_camera</camera_name>
-            <frame_name>overhead_camera_link</frame_name>
-          </plugin>
         </sensor>
       </link>
     </model>
+    <plugin name="overhead_camera_controller" filename="libgazebo_ros_camera.so">
+      <ros>
+        <namespace>/overhead_camera</namespace>
+      </ros>
+      <camera_name>overhead_camera</camera_name>
+      <frame_name>overhead_camera_link</frame_name>
+    </plugin>
   </world>
 </sdf>

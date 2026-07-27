@@ -1,0 +1,8 @@
+int32 object_id
+---
+bool success
+string label
+float64[3] pose
+float64[4] bbox
+bool pickable
+string status

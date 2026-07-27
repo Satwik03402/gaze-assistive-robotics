@@ -2,143 +2,363 @@
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
-from sensor_msgs.msg import JointState
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+from summer_robotics_interfaces.msg import ConfirmedIntent
+from summer_robotics_interfaces.srv import GetObjectById, GetAvailableObjects
+from summer_robotics_interfaces.msg import RobotCommand, RobotStatus
+
+from summer_robotics.robot_commands import (
+    MOVE_TO_OBJECT,
+    PICK,
+    MOVE_TO_PLACE,
+    PLACE,
+    HOME
+)
+
 
 class TaskPlanner(Node):
     def __init__(self):
         super().__init__("task_planner")
-        # -------------------------
-        # Internal state
-        # -------------------------
-        self.selected_object = None
+
+        self.selected_object_id = None
         self.current_state = "IDLE"
+
+        self.current_object_info = None
+        self.current_place_zone_info = None
+        self.place_zone_id = None
+
+        self.goal_sent = False
         self.object_attached = False
 
-        self.current_joint_positions = {}
-        self.active_target = None
+        self.lookup_future = None
+        self.lookup_in_progress = False
+        self.lookup_retry_start_time = None
+        self.lookup_timeout_sec = 5.0
+
+        self.available_objects_future = None
+        self.available_objects_lookup_in_progress = False
+
+        self.place_zone_lookup_future = None
+        self.place_zone_lookup_in_progress = False
+
+        self.waiting_for_robot = False
+        self.robot_command_done = False
+        self.robot_command_failed = False
+        self.expected_robot_command = None
+
+        self.confirmed_intent_sub = self.create_subscription(
+            ConfirmedIntent,
+            "/confirmed_intent",
+            self.confirmed_intent_callback,
+            10
+        )
+
+        self.robot_status_sub = self.create_subscription(
+            RobotStatus,
+            "/robot_status",
+            self.robot_status_callback,
+            10
+        )
+
+        self.object_lookup_client = self.create_client(
+            GetObjectById,
+            "/get_object_by_id"
+        )
+
+        self.available_objects_client = self.create_client(
+            GetAvailableObjects,
+            "/get_available_objects"
+        )
+
+        self.robot_command_pub = self.create_publisher(
+            RobotCommand,
+            "/robot_command",
+            10
+        )
+
         self.state_timer = self.create_timer(
             0.2,
             self.run_state_machine
         )
-        self.goal_sent = False
-        self.position_tolerance = 0.03
-        self.state_start_time = None
-        self.simulated_action_duration = 1.0
-
-        # -------------------------
-        # Hardcoded joint poses
-        # Version 1 only
-        # -------------------------
-        self.home_pose = [0.0, 0.0]
-        self.red_cube_reach_pose = [0.7, -0.8]
-        self.blue_cube_reach_pose = [0.7, 0.8]
-        self.place_pose = [1.0, 0.0]
 
         self.get_logger().info("Task Planner started.")
         self.get_logger().info(f"Current state: {self.current_state}")
-        
-        self.selected_object_sub = self.create_subscription(
-        	String,
-        	"/selected_object",
-        	self.selected_object_callback,
-        	10
-        )
-        
-        self.start_task_sub = self.create_subscription(
-        	String,
-        	"/start_task",
-        	self.start_task_callback,
-        	10
-        )
-        
-        self.joint_state_sub = self.create_subscription(
-            JointState,
-            "/joint_states",
-            self.joint_state_callback,
-            10
-        )
-        
-        self.trajectory_pub = self.create_publisher(
-        	JointTrajectory,
-        	"/arm_controller/joint_trajectory",
-        	10
-        )
 
-    def start_task_callback(self, msg):
-        if msg.data.lower() != "start":
-            self.get_logger().warn(f"Unknown start command: {msg.data}")
-            return
-
-        if self.selected_object is None:
-            self.get_logger().warn("Start requested, but no object selected yet.")
-            return
-
+    def confirmed_intent_callback(self, msg):
         if self.current_state != "IDLE":
-            self.get_logger().warn(f"Task already running. Current state: {self.current_state}")
+            self.get_logger().warn(
+                f"Cannot start new task. Current state: {self.current_state}"
+            )
             return
+
+        if msg.command != "pick":
+            self.get_logger().warn(
+                f"Unsupported confirmed intent: {msg.command}"
+            )
+            return
+
+        self.selected_object_id = msg.object_id
+        self.lookup_retry_start_time = self.get_clock().now()
+
+        self.current_object_info = None
+        self.current_place_zone_info = None
+        self.place_zone_id = None
+
+        self.lookup_future = None
+        self.lookup_in_progress = False
+
+        self.available_objects_future = None
+        self.available_objects_lookup_in_progress = False
+
+        self.place_zone_lookup_future = None
+        self.place_zone_lookup_in_progress = False
+
+        self.goal_sent = False
+        self.object_attached = False
+
+        self.robot_command_done = False
+        self.robot_command_failed = False
+        self.waiting_for_robot = False
+        self.expected_robot_command = None
 
         self.current_state = "MOVING_TO_OBJECT"
-        self.get_logger().info(f"Starting task for: {self.selected_object}")
-
-    def joint_state_callback(self, msg):
-        for name, position in zip(msg.name, msg.position):
-            self.current_joint_positions[name] = position
-    
-    def selected_object_callback(self, msg):
-        if msg.data not in ["red_cube", "blue_cube"]:
-            self.get_logger().warn(f"Unknown object selected: {msg.data}")
-            return
-
-        self.selected_object = msg.data
-        self.get_logger().info(f"Selected object stored: {self.selected_object}")
-
-        if self.current_state == "IDLE":
-            self.current_state = "MOVING_TO_OBJECT"
-            self.goal_sent = False
-            self.get_logger().info(f"Auto-starting task for: {self.selected_object}")
-        else:
-            self.get_logger().warn(f"Cannot start new task. Current state: {self.current_state}")
-
-    def send_joint_goal(self, joint_names, positions):
-
-        traj_msg = JointTrajectory()
-
-        traj_msg.joint_names = joint_names
-
-        point = JointTrajectoryPoint()
-
-        point.positions = positions
-
-        point.time_from_start.sec = 2
-
-        traj_msg.points.append(point)
-
-        self.trajectory_pub.publish(traj_msg)
-
-        self.active_target = positions
 
         self.get_logger().info(
-            f"Sent joint goal: {positions}"
+            f"Selected object ID stored: {self.selected_object_id}"
+        )
+        self.get_logger().info(
+            f"Auto-starting task for object ID: {self.selected_object_id}"
         )
 
-    def has_reached_target(self):
-        if self.active_target is None:
+    def robot_status_callback(self, msg):
+        if self.expected_robot_command != msg.current_command:
+            return
+
+        if msg.status == "DONE" and msg.success:
+            self.robot_command_done = True
+            self.waiting_for_robot = False
+
+        elif msg.status == "FAILED":
+            self.robot_command_failed = True
+            self.waiting_for_robot = False
+
+    def start_object_lookup(self):
+        if self.selected_object_id is None:
+            self.get_logger().warn("No selected object ID to look up.")
             return False
 
-        required_joints = ["joint_1", "joint_2"]
+        if not self.object_lookup_client.service_is_ready():
+            self.get_logger().warn("Object registry service not ready.")
+            return False
 
-        for joint_name, target_position in zip(required_joints, self.active_target):
-            if joint_name not in self.current_joint_positions:
+        request = GetObjectById.Request()
+        request.object_id = self.selected_object_id
+
+        self.lookup_future = self.object_lookup_client.call_async(request)
+        self.lookup_in_progress = True
+
+        self.get_logger().info(
+            f"Requested object lookup for ID: {self.selected_object_id}"
+        )
+        return True
+
+    def start_place_zone_id_discovery(self):
+        if not self.available_objects_client.service_is_ready():
+            self.get_logger().warn("Available objects service not ready.")
+            return False
+
+        request = GetAvailableObjects.Request()
+
+        self.available_objects_future = self.available_objects_client.call_async(
+            request
+        )
+        self.available_objects_lookup_in_progress = True
+
+        self.get_logger().info(
+            "Requested available objects to find place_zone."
+        )
+        return True
+
+    def start_place_zone_lookup(self):
+        if self.place_zone_id is None:
+            self.get_logger().warn("No place_zone ID available.")
+            return False
+
+        if not self.object_lookup_client.service_is_ready():
+            self.get_logger().warn("Object registry service not ready.")
+            return False
+
+        request = GetObjectById.Request()
+        request.object_id = self.place_zone_id
+
+        self.place_zone_lookup_future = self.object_lookup_client.call_async(
+            request
+        )
+        self.place_zone_lookup_in_progress = True
+
+        self.get_logger().info(
+            f"Requested place zone lookup for ID: {self.place_zone_id}"
+        )
+        return True
+
+    def send_robot_command(self, command, object_info=None):
+        msg = RobotCommand()
+        msg.command = command
+
+        if object_info is not None:
+            msg.object_id = self.selected_object_id
+            msg.x = object_info.pose[0]
+            msg.y = object_info.pose[1]
+            msg.z = object_info.pose[2]
+        else:
+            msg.object_id = 0
+            msg.x = 0.0
+            msg.y = 0.0
+            msg.z = 0.0
+
+        msg.qx = 0.0
+        msg.qy = 0.0
+        msg.qz = 0.0
+        msg.qw = 1.0
+
+        self.robot_command_pub.publish(msg)
+
+        self.get_logger().info(
+            f"Sent robot command: {command} "
+            f"object_id={msg.object_id}, "
+            f"pose=({msg.x:.2f}, {msg.y:.2f}, {msg.z:.2f})"
+        )
+
+        self.expected_robot_command = command
+        self.waiting_for_robot = True
+        self.robot_command_done = False
+        self.robot_command_failed = False
+
+    def reset_task(self):
+        self.selected_object_id = None
+        self.current_object_info = None
+        self.current_place_zone_info = None
+        self.place_zone_id = None
+
+        self.goal_sent = False
+        self.object_attached = False
+
+        self.lookup_future = None
+        self.lookup_in_progress = False
+
+        self.available_objects_future = None
+        self.available_objects_lookup_in_progress = False
+
+        self.place_zone_lookup_future = None
+        self.place_zone_lookup_in_progress = False
+
+        self.waiting_for_robot = False
+        self.robot_command_done = False
+        self.robot_command_failed = False
+        self.expected_robot_command = None
+
+        self.current_state = "IDLE"
+        self.get_logger().info("State: IDLE")
+
+    def cancel_task_due_to_object_loss(self):
+        self.get_logger().warn(
+            "Selected object is no longer available. Cancelling task."
+        )
+        self.reset_task()
+
+    def handle_object_lookup_response(self):
+        if not self.lookup_future.done():
+            return False
+
+        response = self.lookup_future.result()
+        self.lookup_future = None
+        self.lookup_in_progress = False
+
+        if not response.success:
+            elapsed = (
+                self.get_clock().now() - self.lookup_retry_start_time
+            ).nanoseconds / 1e9
+
+            if elapsed < self.lookup_timeout_sec:
+                self.get_logger().info(
+                    f"Object not found yet. Retrying... ({elapsed:.1f}s)"
+                )
+                self.start_object_lookup()
                 return False
 
-            current_position = self.current_joint_positions[joint_name]
+            self.get_logger().warn(
+                "Object could not be discovered within timeout."
+            )
+            self.cancel_task_due_to_object_loss()
+            return False
 
-            error = abs(current_position - target_position)
+        if not response.pickable:
+            self.get_logger().warn("Selected object is not pickable.")
+            self.cancel_task_due_to_object_loss()
+            return False
 
-            if error > self.position_tolerance:
-                return False
+        if response.status != "ACTIVE":
+            self.get_logger().warn(
+                f"Selected object status is {response.status}. Cannot continue."
+            )
+            self.cancel_task_due_to_object_loss()
+            return False
+
+        self.current_object_info = response
+
+        self.get_logger().info(
+            f"Object lookup success: ID={self.selected_object_id}, "
+            f"label={response.label}, pose={list(response.pose)}"
+        )
+
+        return True
+
+    def handle_place_zone_id_response(self):
+        if not self.available_objects_future.done():
+            return False
+
+        response = self.available_objects_future.result()
+        self.available_objects_future = None
+        self.available_objects_lookup_in_progress = False
+
+        for object_id, label in zip(response.ids, response.labels):
+            if label == "place_zone":
+                self.place_zone_id = object_id
+                self.get_logger().info(
+                    f"Discovered place_zone ID: {self.place_zone_id}"
+                )
+                return True
+
+        self.get_logger().warn("No place_zone found in registry.")
+        self.reset_task()
+        return False
+
+    def handle_place_zone_lookup_response(self):
+        if not self.place_zone_lookup_future.done():
+            return False
+
+        response = self.place_zone_lookup_future.result()
+        self.place_zone_lookup_future = None
+        self.place_zone_lookup_in_progress = False
+
+        if not response.success:
+            self.get_logger().warn("Place zone lookup failed.")
+            self.reset_task()
+            return False
+
+        if response.label != "place_zone":
+            self.get_logger().warn(
+                f"Object ID {self.place_zone_id} is not place_zone. "
+                f"Label={response.label}"
+            )
+            self.reset_task()
+            return False
+
+        self.current_place_zone_info = response
+
+        self.get_logger().info(
+            f"Place zone lookup success: pose={list(response.pose)}"
+        )
 
         return True
 
@@ -146,35 +366,49 @@ class TaskPlanner(Node):
         if self.current_state == "IDLE":
             return
 
+        if self.robot_command_failed:
+            self.get_logger().warn("Robot command failed. Cancelling task.")
+            self.reset_task()
+            return
+
         if self.current_state == "MOVING_TO_OBJECT":
             if not self.goal_sent:
-                if self.selected_object == "red_cube":
-                    target = self.red_cube_reach_pose
-                elif self.selected_object == "blue_cube":
-                    target = self.blue_cube_reach_pose
-                else:
-                    self.get_logger().warn("No valid object selected.")
-                    self.current_state = "IDLE"
-                    return
+                if self.current_object_info is None:
+                    if not self.lookup_in_progress:
+                        if not self.start_object_lookup():
+                            self.get_logger().warn(
+                                "Could not start object lookup. Returning to IDLE."
+                            )
+                            self.reset_task()
+                        return
 
-                self.send_joint_goal(["joint_1", "joint_2"], target)
+                    if self.lookup_in_progress:
+                        ready = self.handle_object_lookup_response()
+                        if not ready:
+                            return
+
+                self.send_robot_command(
+                    MOVE_TO_OBJECT,
+                    self.current_object_info
+                )
                 self.goal_sent = True
                 self.get_logger().info("State: MOVING_TO_OBJECT")
                 return
 
-            if self.has_reached_target():
+            if self.robot_command_done:
                 self.get_logger().info("Reached selected object.")
                 self.current_state = "PICK_OBJECT"
                 self.goal_sent = False
-                self.state_start_time = self.get_clock().now()
                 self.get_logger().info("State: PICK_OBJECT")
-            
-        if self.current_state == "PICK_OBJECT":
-            elapsed_time = (
-                self.get_clock().now() - self.state_start_time
-            ).nanoseconds / 1e9
 
-            if elapsed_time >= self.simulated_action_duration:
+        if self.current_state == "PICK_OBJECT":
+            if not self.goal_sent:
+                self.send_robot_command(PICK, self.current_object_info)
+                self.goal_sent = True
+                self.get_logger().info("State: PICK_OBJECT")
+                return
+
+            if self.robot_command_done:
                 self.object_attached = True
                 self.current_state = "MOVING_TO_PLACE_ZONE"
                 self.goal_sent = False
@@ -183,24 +417,56 @@ class TaskPlanner(Node):
 
         if self.current_state == "MOVING_TO_PLACE_ZONE":
             if not self.goal_sent:
-                self.send_joint_goal(["joint_1", "joint_2"], self.place_pose)
+                if self.place_zone_id is None:
+                    if not self.available_objects_lookup_in_progress:
+                        if not self.start_place_zone_id_discovery():
+                            self.get_logger().warn(
+                                "Could not start place zone ID discovery."
+                            )
+                            self.reset_task()
+                        return
+
+                    if self.available_objects_lookup_in_progress:
+                        ready = self.handle_place_zone_id_response()
+                        if not ready:
+                            return
+
+                if self.current_place_zone_info is None:
+                    if not self.place_zone_lookup_in_progress:
+                        if not self.start_place_zone_lookup():
+                            self.get_logger().warn(
+                                "Could not start place zone lookup. Returning to IDLE."
+                            )
+                            self.reset_task()
+                        return
+
+                    if self.place_zone_lookup_in_progress:
+                        ready = self.handle_place_zone_lookup_response()
+                        if not ready:
+                            return
+
+                self.send_robot_command(
+                    MOVE_TO_PLACE,
+                    self.current_place_zone_info
+                )
                 self.goal_sent = True
                 self.get_logger().info("State: MOVING_TO_PLACE_ZONE")
                 return
 
-            if self.has_reached_target():
+            if self.robot_command_done:
                 self.get_logger().info("Reached place zone.")
                 self.current_state = "DROP_OBJECT"
                 self.goal_sent = False
-                self.state_start_time = self.get_clock().now()
                 self.get_logger().info("State: DROP_OBJECT")
-        
-        if self.current_state == "DROP_OBJECT":
-            elapsed_time = (
-                self.get_clock().now() - self.state_start_time
-            ).nanoseconds / 1e9
 
-            if elapsed_time >= self.simulated_action_duration:
+        if self.current_state == "DROP_OBJECT":
+            if not self.goal_sent:
+                self.send_robot_command(PLACE, self.current_place_zone_info)
+                self.goal_sent = True
+                self.get_logger().info("State: DROP_OBJECT")
+                return
+
+            if self.robot_command_done:
                 self.object_attached = False
                 self.current_state = "RETURNING_HOME"
                 self.goal_sent = False
@@ -209,33 +475,28 @@ class TaskPlanner(Node):
 
         if self.current_state == "RETURNING_HOME":
             if not self.goal_sent:
-                self.send_joint_goal(["joint_1", "joint_2"], self.home_pose)
+                self.send_robot_command(HOME)
                 self.goal_sent = True
                 self.get_logger().info("State: RETURNING_HOME")
                 return
 
-            if self.has_reached_target():
+            if self.robot_command_done:
                 self.get_logger().info("Returned home.")
                 self.current_state = "TASK_COMPLETE"
                 self.goal_sent = False
-                self.get_logger().info("State: TASK_COMPLETE")     
+                self.get_logger().info("State: TASK_COMPLETE")
 
         if self.current_state == "TASK_COMPLETE":
-            self.get_logger().info(f"Task complete for: {self.selected_object}")
+            self.get_logger().info(
+                f"Task complete for: {self.selected_object_id}"
+            )
+            self.reset_task()
 
-            self.selected_object = None
-            self.active_target = None
-            self.object_attached = False
-            self.goal_sent = False
-            self.state_start_time = None
 
-            self.current_state = "IDLE"
-            self.get_logger().info("State: IDLE")           
 def main(args=None):
     rclpy.init(args=args)
 
     node = TaskPlanner()
-
     rclpy.spin(node)
 
     node.destroy_node()
