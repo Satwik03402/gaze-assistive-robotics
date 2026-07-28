@@ -29,6 +29,7 @@ class TaskPlanner(Node):
 
         self.goal_sent = False
         self.object_attached = False
+        self.cancel_requested = False
 
         self.lookup_future = None
         self.lookup_in_progress = False
@@ -85,6 +86,17 @@ class TaskPlanner(Node):
         self.get_logger().info(f"Current state: {self.current_state}")
 
     def confirmed_intent_callback(self, msg):
+        if msg.command == "cancel":
+            if self.current_state == "IDLE":
+                self.get_logger().info("No active task to cancel.")
+                return
+
+            self.cancel_requested = True
+            self.get_logger().warn(
+                f"Cancellation requested during state: {self.current_state}"
+            )
+            return
+
         if self.current_state != "IDLE":
             self.get_logger().warn(
                 f"Cannot start new task. Current state: {self.current_state}"
@@ -115,6 +127,7 @@ class TaskPlanner(Node):
 
         self.goal_sent = False
         self.object_attached = False
+        self.cancel_requested = False
 
         self.robot_command_done = False
         self.robot_command_failed = False
@@ -242,6 +255,7 @@ class TaskPlanner(Node):
 
         self.goal_sent = False
         self.object_attached = False
+        self.cancel_requested = False
 
         self.lookup_future = None
         self.lookup_in_progress = False
@@ -397,12 +411,31 @@ class TaskPlanner(Node):
 
             if self.robot_command_done:
                 self.get_logger().info("Reached selected object.")
-                self.current_state = "PICK_OBJECT"
                 self.goal_sent = False
+
+                if self.cancel_requested:
+                    self.get_logger().warn(
+                        "Cancellation accepted. Skipping pick and returning home."
+                    )
+                    self.current_state = "RETURNING_HOME"
+                    self.get_logger().info("State: RETURNING_HOME")
+                    return
+
+                self.current_state = "PICK_OBJECT"
                 self.get_logger().info("State: PICK_OBJECT")
+                return
 
         if self.current_state == "PICK_OBJECT":
             if not self.goal_sent:
+                if self.cancel_requested:
+                    self.get_logger().warn(
+                        "Cancellation accepted before pick. Returning home."
+                    )
+                    self.current_state = "RETURNING_HOME"
+                    self.goal_sent = False
+                    self.get_logger().info("State: RETURNING_HOME")
+                    return
+
                 self.send_robot_command(PICK, self.current_object_info)
                 self.goal_sent = True
                 self.get_logger().info("State: PICK_OBJECT")
@@ -414,6 +447,7 @@ class TaskPlanner(Node):
                 self.goal_sent = False
                 self.get_logger().info("Object picked.")
                 self.get_logger().info("State: MOVING_TO_PLACE_ZONE")
+                return
 
         if self.current_state == "MOVING_TO_PLACE_ZONE":
             if not self.goal_sent:

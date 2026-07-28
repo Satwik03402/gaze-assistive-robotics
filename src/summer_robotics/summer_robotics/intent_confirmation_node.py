@@ -48,7 +48,13 @@ class IntentConfirmationNode(Node):
         command = msg.command.strip().lower()
 
         if command == "cancel":
+            self.publish_intent(
+                object_id=-1,
+                command="cancel"
+            )
+
             self.selected_object_id = -1
+
             self.get_logger().info("Selection cancelled.")
             return
 
