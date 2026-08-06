@@ -30,6 +30,7 @@ class TaskPlanner(Node):
         self.goal_sent = False
         self.object_attached = False
         self.cancel_requested = False
+        self.safe_cancel_after_pick = False
 
         self.lookup_future = None
         self.lookup_in_progress = False
@@ -92,9 +93,21 @@ class TaskPlanner(Node):
                 return
 
             self.cancel_requested = True
-            self.get_logger().warn(
-                f"Cancellation requested during state: {self.current_state}"
-            )
+
+            if self.object_attached or (
+                self.current_state == "PICK_OBJECT" and self.goal_sent
+            ):
+                self.safe_cancel_after_pick = True
+
+                self.get_logger().warn(
+                    "Cancellation requested after pickup started. "
+                    "The robot will safely place the object and return home."
+                )
+            else:
+                self.get_logger().warn(
+                    f"Cancellation requested during state: {self.current_state}"
+                )
+
             return
 
         if self.current_state != "IDLE":
@@ -128,6 +141,7 @@ class TaskPlanner(Node):
         self.goal_sent = False
         self.object_attached = False
         self.cancel_requested = False
+        self.safe_cancel_after_pick = False
 
         self.robot_command_done = False
         self.robot_command_failed = False
@@ -256,6 +270,7 @@ class TaskPlanner(Node):
         self.goal_sent = False
         self.object_attached = False
         self.cancel_requested = False
+        self.safe_cancel_after_pick = False
 
         self.lookup_future = None
         self.lookup_in_progress = False
@@ -492,10 +507,14 @@ class TaskPlanner(Node):
                 self.current_state = "DROP_OBJECT"
                 self.goal_sent = False
                 self.get_logger().info("State: DROP_OBJECT")
+                return
 
         if self.current_state == "DROP_OBJECT":
             if not self.goal_sent:
-                self.send_robot_command(PLACE, self.current_place_zone_info)
+                self.send_robot_command(
+                    PLACE,
+                    self.current_place_zone_info
+                )
                 self.goal_sent = True
                 self.get_logger().info("State: DROP_OBJECT")
                 return
@@ -504,8 +523,16 @@ class TaskPlanner(Node):
                 self.object_attached = False
                 self.current_state = "RETURNING_HOME"
                 self.goal_sent = False
+
                 self.get_logger().info("Object dropped.")
+
+                if self.safe_cancel_after_pick:
+                    self.get_logger().info(
+                        "Safe drop completed following cancellation."
+                    )
+
                 self.get_logger().info("State: RETURNING_HOME")
+                return
 
         if self.current_state == "RETURNING_HOME":
             if not self.goal_sent:
@@ -519,11 +546,19 @@ class TaskPlanner(Node):
                 self.current_state = "TASK_COMPLETE"
                 self.goal_sent = False
                 self.get_logger().info("State: TASK_COMPLETE")
+                return
 
         if self.current_state == "TASK_COMPLETE":
-            self.get_logger().info(
-                f"Task complete for: {self.selected_object_id}"
-            )
+            if self.safe_cancel_after_pick:
+                self.get_logger().info(
+                    f"Safe cancellation complete for object: "
+                    f"{self.selected_object_id}"
+                )
+            else:
+                self.get_logger().info(
+                    f"Task complete for: {self.selected_object_id}"
+                )
+
             self.reset_task()
 
 

@@ -17,6 +17,10 @@ class GazeObjectSelectorNode(Node):
         self.detected_objects = []
         self.last_selected_id = None
 
+        self.candidate_object_id = None
+        self.candidate_start_time = None
+        self.selection_published = False
+        self.dwell_duration = 1.0
         self.gaze_sub = self.create_subscription(
             EyeGaze,
             "/eye_gaze",
@@ -57,10 +61,16 @@ class GazeObjectSelectorNode(Node):
 
         return pickable_objects
 
+    def reset_candidate(self):
+        self.candidate_object_id = None
+        self.candidate_start_time = None
+        self.selection_published = False
+
     def update_selection(self):
         pickable_objects = self.get_pickable_objects()
 
         if len(pickable_objects) == 0:
+            self.reset_candidate()
             return
 
         selected_object = None
@@ -78,24 +88,53 @@ class GazeObjectSelectorNode(Node):
             )
 
         else:
+            self.reset_candidate()
             return
 
         if selected_object is None:
             return
 
+        current_time = self.get_clock().now()
+
+        if self.candidate_object_id != selected_object.id:
+            self.candidate_object_id = selected_object.id
+            self.candidate_start_time = current_time
+            self.selection_published = False
+
+            self.get_logger().info(
+                f"Gaze candidate: object ID {selected_object.id}, "
+                f"{selected_object.label}"
+            )
+            return
+
+        if self.candidate_start_time is None:
+            self.candidate_start_time = current_time
+            return
+
+        elapsed = (
+            current_time - self.candidate_start_time
+        ).nanoseconds / 1_000_000_000.0
+
+        if elapsed < self.dwell_duration:
+            return
+
+        if self.selection_published:
+            return
+
         selected_msg = Int32()
         selected_msg.data = selected_object.id
-
         self.selected_pub.publish(selected_msg)
 
-        if self.last_selected_id != selected_object.id:
-            self.get_logger().info(
-                f"Gaze selected object ID {selected_object.id}: "
-                f"{selected_object.label} "
-                f"(state={self.latest_gaze_state}, yaw={self.latest_yaw:.2f})"
-            )
-
+        self.selection_published = True
         self.last_selected_id = selected_object.id
+
+        self.get_logger().info(
+            f"Gaze selection confirmed after {elapsed:.2f}s: "
+            f"object ID {selected_object.id}, "
+            f"{selected_object.label} "
+            f"(state={self.latest_gaze_state}, "
+            f"yaw={self.latest_yaw:.2f})"
+        )
 
 
 def main(args=None):
