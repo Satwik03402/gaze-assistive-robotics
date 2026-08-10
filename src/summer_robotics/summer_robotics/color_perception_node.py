@@ -36,6 +36,13 @@ class ColorPerceptionNode(Node):
     def detect_color_object(self, hsv_image, color_name, lower, upper):
         mask = cv2.inRange(hsv_image, lower, upper)
 
+        kernel = np.ones((3, 3), np.uint8)
+
+        mask = cv2.morphologyEx(
+            mask,
+            cv2.MORPH_CLOSE,
+            kernel
+        )
         contours, _ = cv2.findContours(
             mask,
             cv2.RETR_EXTERNAL,

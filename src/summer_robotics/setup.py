@@ -49,6 +49,8 @@ setup(
         	'object_attachment_node = summer_robotics.object_attachment_node:main',
         	'real_robot_adapter_node = summer_robotics.real_robot_adapter_node:main',
         	'gazebo_object_controller_node = summer_robotics.gazebo_object_controller_node:main',
+        	'gaze_highlight_node = summer_robotics.gaze_highlight_node:main',
+        	'gazebo_gaze_indicator_node = summer_robotics.gazebo_gaze_indicator_node:main',
         ],
     },
 )
