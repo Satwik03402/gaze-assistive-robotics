@@ -12,34 +12,37 @@ class GazeObjectSelectorNode(Node):
     def __init__(self):
         super().__init__("gaze_object_selector_node")
 
-        # Latest gaze information
         self.latest_gaze_state = "NO_FACE"
         self.latest_yaw = 0.0
-
-        # Latest detected objects
         self.detected_objects = []
 
-        # Final selection state
         self.last_selected_id = None
         self.selection_published = False
 
-        # Stable candidate state
-        self.candidate_object_id = None
-        self.candidate_start_time = None
-
-        # Raw candidate stability filtering
+        # Candidate timing
         self.raw_candidate_id = None
         self.raw_candidate_start_time = None
         self.candidate_stability_duration = 0.25
 
-        # Dwell selection
+        self.candidate_object_id = None
+        self.candidate_start_time = None
         self.dwell_duration = 1.0
 
-        # Short grace period for noisy CENTER / NO_FACE frames
+        # Brief tracking loss should not immediately clear a candidate
         self.gaze_loss_start_time = None
         self.gaze_loss_grace_duration = 0.30
 
-        # Subscribe to iris-based gaze
+        # Iris-to-workspace calibration
+        self.iris_left = 0.417
+        self.iris_center = 0.482
+        self.iris_right = 0.527
+
+        self.workspace_left_y = 0.10
+        self.workspace_center_y = 0.0
+        self.workspace_right_y = -0.25
+
+        self.max_gaze_object_distance = 0.12
+
         self.gaze_sub = self.create_subscription(
             EyeGaze,
             "/eye_gaze",
@@ -47,7 +50,6 @@ class GazeObjectSelectorNode(Node):
             10
         )
 
-        # Subscribe to detected objects
         self.objects_sub = self.create_subscription(
             DetectedObjectArray,
             "/detected_objects",
@@ -55,14 +57,12 @@ class GazeObjectSelectorNode(Node):
             10
         )
 
-        # Publish confirmed object selection
         self.selected_pub = self.create_publisher(
             Int32,
             "/selected_object_id",
             10
         )
 
-        # Publish current stable gaze candidate
         self.candidate_pub = self.create_publisher(
             Int32,
             "/gaze_candidate_object_id",
@@ -77,76 +77,105 @@ class GazeObjectSelectorNode(Node):
         self.latest_gaze_state = msg.gaze_state
         self.latest_yaw = msg.yaw
 
+        # Gaze updates drive the selection timing.
+        self.update_selection()
+
     def objects_callback(self, msg):
         self.detected_objects = msg.objects
 
-        self.update_selection()
-
     def get_pickable_objects(self):
-        pickable_objects = []
-
-        for obj in self.detected_objects:
+        return [
+            obj
+            for obj in self.detected_objects
             if (
                 obj.pickable
                 and obj.status == "ACTIVE"
                 and obj.label != "green_cube"
-            ):
-                pickable_objects.append(obj)
-
-        return pickable_objects
+            )
+        ]
 
     def reset_candidate(self):
-        # Tell the Gazebo indicator that there is
-        # no longer an active candidate.
         if self.candidate_object_id is not None:
-            candidate_msg = Int32()
-            candidate_msg.data = -1
+            msg = Int32()
+            msg.data = -1
+            self.candidate_pub.publish(msg)
 
-            self.candidate_pub.publish(candidate_msg)
-
-        # Clear stable candidate
         self.candidate_object_id = None
         self.candidate_start_time = None
 
-        # Clear raw candidate
         self.raw_candidate_id = None
         self.raw_candidate_start_time = None
 
-        # Clear gaze-loss timer
         self.gaze_loss_start_time = None
-
-        # Allow a future selection
         self.selection_published = False
+
+    def estimate_workspace_y(self, iris_ratio):
+        # Piecewise interpolation around the calibrated center.
+        if iris_ratio <= self.iris_center:
+            ratio = (
+                iris_ratio - self.iris_left
+            ) / (
+                self.iris_center - self.iris_left
+            )
+
+            ratio = max(0.0, min(1.0, ratio))
+
+            return (
+                self.workspace_left_y
+                + ratio
+                * (
+                    self.workspace_center_y
+                    - self.workspace_left_y
+                )
+            )
+
+        ratio = (
+            iris_ratio - self.iris_center
+        ) / (
+            self.iris_right - self.iris_center
+        )
+
+        ratio = max(0.0, min(1.0, ratio))
+
+        return (
+            self.workspace_center_y
+            + ratio
+            * (
+                self.workspace_right_y
+                - self.workspace_center_y
+            )
+        )
 
     def update_selection(self):
         pickable_objects = self.get_pickable_objects()
 
-        if len(pickable_objects) == 0:
+        if not pickable_objects:
             self.reset_candidate()
             return
 
-        selected_object = None
+        if self.latest_gaze_state == "NO_FACE":
+            self.reset_candidate()
+            return
 
-        # --------------------------------------------------
-        # STEP 1: Convert gaze direction into an object
-        # --------------------------------------------------
+        estimated_y = self.estimate_workspace_y(
+            self.latest_yaw
+        )
 
-        if self.latest_gaze_state == "LOOKING_LEFT":
-            selected_object = max(
-                pickable_objects,
-                key=lambda obj: obj.y
-            )
+        # Find the object nearest to the estimated gaze position.
+        selected_object = min(
+            pickable_objects,
+            key=lambda obj: abs(obj.y - estimated_y)
+        )
 
-        elif self.latest_gaze_state == "LOOKING_RIGHT":
-            selected_object = min(
-                pickable_objects,
-                key=lambda obj: obj.y
-            )
+        distance = abs(
+            selected_object.y - estimated_y
+        )
 
-        else:
-            # CENTER / NO_FACE may occur briefly because
-            # iris tracking is noisy. Do not immediately
-            # destroy the current candidate.
+        if distance > self.max_gaze_object_distance:
+            selected_object = None
+
+        # Allow short periods of gaze away from an object.
+        if selected_object is None:
             current_time = self.get_clock().now()
 
             if self.gaze_loss_start_time is None:
@@ -160,22 +189,13 @@ class GazeObjectSelectorNode(Node):
             if lost_elapsed < self.gaze_loss_grace_duration:
                 return
 
-            # Gaze has genuinely left the object.
             self.reset_candidate()
             return
 
-        # We have valid LEFT or RIGHT gaze again.
         self.gaze_loss_start_time = None
-
-        if selected_object is None:
-            return
-
         current_time = self.get_clock().now()
 
-        # --------------------------------------------------
-        # STEP 2: Stabilize the raw candidate
-        # --------------------------------------------------
-
+        # Require the same raw target for a short period.
         if self.raw_candidate_id != selected_object.id:
             self.raw_candidate_id = selected_object.id
             self.raw_candidate_start_time = current_time
@@ -189,14 +209,10 @@ class GazeObjectSelectorNode(Node):
             current_time - self.raw_candidate_start_time
         ).nanoseconds / 1_000_000_000.0
 
-        # Ignore very short gaze fluctuations.
         if raw_elapsed < self.candidate_stability_duration:
             return
 
-        # --------------------------------------------------
-        # STEP 3: Publish stable candidate
-        # --------------------------------------------------
-
+        # Promote the raw target to a stable candidate.
         if self.candidate_object_id != selected_object.id:
             self.candidate_object_id = selected_object.id
             self.candidate_start_time = current_time
@@ -204,7 +220,6 @@ class GazeObjectSelectorNode(Node):
 
             candidate_msg = Int32()
             candidate_msg.data = selected_object.id
-
             self.candidate_pub.publish(candidate_msg)
 
             self.get_logger().info(
@@ -214,10 +229,6 @@ class GazeObjectSelectorNode(Node):
             )
 
             return
-
-        # --------------------------------------------------
-        # STEP 4: Dwell on stable candidate
-        # --------------------------------------------------
 
         if self.candidate_start_time is None:
             self.candidate_start_time = current_time
@@ -230,30 +241,23 @@ class GazeObjectSelectorNode(Node):
         if elapsed < self.dwell_duration:
             return
 
-        # Don't repeatedly publish the same selection
-        # while the user continues looking at the object.
         if self.selection_published:
             return
 
-        # --------------------------------------------------
-        # STEP 5: Confirm selection
-        # --------------------------------------------------
-
+        # Dwell completed: publish the final object selection.
         selected_msg = Int32()
         selected_msg.data = selected_object.id
-
         self.selected_pub.publish(selected_msg)
 
         self.selection_published = True
         self.last_selected_id = selected_object.id
 
         self.get_logger().info(
-            f"Gaze selection confirmed after "
-            f"{elapsed:.2f}s: "
+            f"Gaze selection confirmed after {elapsed:.2f}s: "
             f"object ID {selected_object.id}, "
             f"{selected_object.label} "
-            f"(state={self.latest_gaze_state}, "
-            f"iris_ratio={self.latest_yaw:.3f})"
+            f"(iris_ratio={self.latest_yaw:.3f}, "
+            f"estimated_y={estimated_y:.3f})"
         )
 
 
@@ -264,7 +268,6 @@ def main(args=None):
 
     try:
         rclpy.spin(node)
-
     except KeyboardInterrupt:
         pass
 
