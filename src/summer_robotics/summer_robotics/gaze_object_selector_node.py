@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import math
+
 import rclpy
 from rclpy.node import Node
 
@@ -12,8 +14,12 @@ class GazeObjectSelectorNode(Node):
     def __init__(self):
         super().__init__("gaze_object_selector_node")
 
-        self.latest_gaze_state = "NO_FACE"
-        self.latest_yaw = 0.0
+        self.latest_horizontal_ratio = 0.0
+        self.latest_vertical_ratio = 0.0
+
+        self.latest_horizontal_state = "NO_FACE"
+        self.latest_vertical_state = "NO_FACE"
+
         self.detected_objects = []
 
         self.last_selected_id = None
@@ -28,11 +34,11 @@ class GazeObjectSelectorNode(Node):
         self.candidate_start_time = None
         self.dwell_duration = 1.0
 
-        # Brief tracking loss should not immediately clear a candidate
+        # Short gaze-loss grace period
         self.gaze_loss_start_time = None
         self.gaze_loss_grace_duration = 0.30
 
-        # Iris-to-workspace calibration
+        # Horizontal iris-to-workspace calibration
         self.iris_left = 0.417
         self.iris_center = 0.482
         self.iris_right = 0.527
@@ -40,6 +46,15 @@ class GazeObjectSelectorNode(Node):
         self.workspace_left_y = 0.10
         self.workspace_center_y = 0.0
         self.workspace_right_y = -0.25
+
+        # Vertical iris-to-workspace calibration
+        self.iris_up = 0.410
+        self.iris_vertical_center = 0.381
+        self.iris_down = 0.344
+
+        self.workspace_up_x = 0.75
+        self.workspace_center_x = 0.90
+        self.workspace_down_x = 1.05
 
         self.max_gaze_object_distance = 0.12
 
@@ -74,10 +89,12 @@ class GazeObjectSelectorNode(Node):
         )
 
     def gaze_callback(self, msg):
-        self.latest_gaze_state = msg.gaze_state
-        self.latest_yaw = msg.yaw
+        self.latest_horizontal_ratio = msg.horizontal_ratio
+        self.latest_vertical_ratio = msg.vertical_ratio
 
-        # Gaze updates drive the selection timing.
+        self.latest_horizontal_state = msg.horizontal_state
+        self.latest_vertical_state = msg.vertical_state
+
         self.update_selection()
 
     def objects_callback(self, msg):
@@ -96,9 +113,9 @@ class GazeObjectSelectorNode(Node):
 
     def reset_candidate(self):
         if self.candidate_object_id is not None:
-            msg = Int32()
-            msg.data = -1
-            self.candidate_pub.publish(msg)
+            candidate_msg = Int32()
+            candidate_msg.data = -1
+            self.candidate_pub.publish(candidate_msg)
 
         self.candidate_object_id = None
         self.candidate_start_time = None
@@ -109,11 +126,10 @@ class GazeObjectSelectorNode(Node):
         self.gaze_loss_start_time = None
         self.selection_published = False
 
-    def estimate_workspace_y(self, iris_ratio):
-        # Piecewise interpolation around the calibrated center.
-        if iris_ratio <= self.iris_center:
+    def estimate_workspace_y(self, horizontal_ratio):
+        if horizontal_ratio <= self.iris_center:
             ratio = (
-                iris_ratio - self.iris_left
+                horizontal_ratio - self.iris_left
             ) / (
                 self.iris_center - self.iris_left
             )
@@ -130,7 +146,7 @@ class GazeObjectSelectorNode(Node):
             )
 
         ratio = (
-            iris_ratio - self.iris_center
+            horizontal_ratio - self.iris_center
         ) / (
             self.iris_right - self.iris_center
         )
@@ -146,6 +162,42 @@ class GazeObjectSelectorNode(Node):
             )
         )
 
+    def estimate_workspace_x(self, vertical_ratio):
+        if vertical_ratio >= self.iris_vertical_center:
+            ratio = (
+                vertical_ratio - self.iris_vertical_center
+            ) / (
+                self.iris_up - self.iris_vertical_center
+            )
+
+            ratio = max(0.0, min(1.0, ratio))
+
+            return (
+                self.workspace_center_x
+                + ratio
+                * (
+                    self.workspace_up_x
+                    - self.workspace_center_x
+                )
+            )
+
+        ratio = (
+            self.iris_vertical_center - vertical_ratio
+        ) / (
+            self.iris_vertical_center - self.iris_down
+        )
+
+        ratio = max(0.0, min(1.0, ratio))
+
+        return (
+            self.workspace_center_x
+            + ratio
+            * (
+                self.workspace_down_x
+                - self.workspace_center_x
+            )
+        )
+
     def update_selection(self):
         pickable_objects = self.get_pickable_objects()
 
@@ -153,28 +205,47 @@ class GazeObjectSelectorNode(Node):
             self.reset_candidate()
             return
 
-        if self.latest_gaze_state == "NO_FACE":
+        if (
+            self.latest_horizontal_state == "NO_FACE"
+            or self.latest_vertical_state == "NO_FACE"
+        ):
             self.reset_candidate()
             return
 
         estimated_y = self.estimate_workspace_y(
-            self.latest_yaw
+            self.latest_horizontal_ratio
         )
 
-        # Find the object nearest to the estimated gaze position.
+        estimated_x = self.estimate_workspace_x(
+            self.latest_vertical_ratio
+        )
+
+        # Find nearest object using true 2-D distance.
         selected_object = min(
             pickable_objects,
-            key=lambda obj: abs(obj.y - estimated_y)
+            key=lambda obj: math.sqrt(
+                (obj.x - estimated_x) ** 2
+                + (obj.y - estimated_y) ** 2
+            )
         )
 
-        distance = abs(
-            selected_object.y - estimated_y
+        distance = math.sqrt(
+            (selected_object.x - estimated_x) ** 2
+            + (selected_object.y - estimated_y) ** 2
+        )
+
+        self.get_logger().info(
+            f"Gaze estimate: "
+            f"x={estimated_x:.3f}, "
+            f"y={estimated_y:.3f}, "
+            f"nearest={selected_object.label}, "
+            f"distance={distance:.3f}"
         )
 
         if distance > self.max_gaze_object_distance:
             selected_object = None
 
-        # Allow short periods of gaze away from an object.
+        # Allow brief gaze excursions without clearing immediately.
         if selected_object is None:
             current_time = self.get_clock().now()
 
@@ -195,7 +266,7 @@ class GazeObjectSelectorNode(Node):
         self.gaze_loss_start_time = None
         current_time = self.get_clock().now()
 
-        # Require the same raw target for a short period.
+        # Stabilize raw candidate.
         if self.raw_candidate_id != selected_object.id:
             self.raw_candidate_id = selected_object.id
             self.raw_candidate_start_time = current_time
@@ -212,7 +283,7 @@ class GazeObjectSelectorNode(Node):
         if raw_elapsed < self.candidate_stability_duration:
             return
 
-        # Promote the raw target to a stable candidate.
+        # Promote raw candidate to stable candidate.
         if self.candidate_object_id != selected_object.id:
             self.candidate_object_id = selected_object.id
             self.candidate_start_time = current_time
@@ -244,7 +315,7 @@ class GazeObjectSelectorNode(Node):
         if self.selection_published:
             return
 
-        # Dwell completed: publish the final object selection.
+        # Final selection after dwell.
         selected_msg = Int32()
         selected_msg.data = selected_object.id
         self.selected_pub.publish(selected_msg)
@@ -256,7 +327,9 @@ class GazeObjectSelectorNode(Node):
             f"Gaze selection confirmed after {elapsed:.2f}s: "
             f"object ID {selected_object.id}, "
             f"{selected_object.label} "
-            f"(iris_ratio={self.latest_yaw:.3f}, "
+            f"(horizontal_ratio={self.latest_horizontal_ratio:.3f}, "
+            f"vertical_ratio={self.latest_vertical_ratio:.3f}, "
+            f"estimated_x={estimated_x:.3f}, "
             f"estimated_y={estimated_y:.3f})"
         )
 

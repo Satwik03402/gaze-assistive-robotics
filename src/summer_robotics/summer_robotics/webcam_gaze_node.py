@@ -14,30 +14,18 @@ class WebcamGazeNode(Node):
     def __init__(self):
         super().__init__("webcam_gaze_node")
 
-        # ---------------------------------------------------------
-        # ROS publisher
-        # ---------------------------------------------------------
         self.gaze_pub = self.create_publisher(
             EyeGaze,
             "/eye_gaze",
             10
         )
 
-        # ---------------------------------------------------------
-        # Webcam
-        # ---------------------------------------------------------
         self.cap = cv2.VideoCapture(0)
 
         if not self.cap.isOpened():
-            self.get_logger().error(
-                "Camera could not be opened."
-            )
+            self.get_logger().error("Camera could not be opened.")
             return
 
-        # ---------------------------------------------------------
-        # MediaPipe Face Mesh
-        # refine_landmarks=True gives us iris landmarks.
-        # ---------------------------------------------------------
         self.mp_face_mesh = mp.solutions.face_mesh
 
         self.face_mesh = self.mp_face_mesh.FaceMesh(
@@ -47,9 +35,6 @@ class WebcamGazeNode(Node):
             min_tracking_confidence=0.5
         )
 
-        # ---------------------------------------------------------
-        # ROS timer
-        # ---------------------------------------------------------
         self.timer = self.create_timer(
             0.1,
             self.process_frame
@@ -57,51 +42,41 @@ class WebcamGazeNode(Node):
 
         self.frame_count = 0
 
-        # ---------------------------------------------------------
-        # Latest valid iris measurement
-        # ---------------------------------------------------------
-        self.latest_iris_ratio = None
-
-        # ---------------------------------------------------------
-        # User calibration references
-        # ---------------------------------------------------------
+        # Horizontal calibration
         self.left_reference = None
         self.center_reference = None
         self.right_reference = None
 
-        self.calibration_complete = False
-
-        # These will be calculated after calibration.
         self.left_threshold = None
         self.right_threshold = None
+        self.horizontal_calibration_complete = False
+
+        # Vertical calibration
+        self.up_reference = None
+        self.vertical_center_reference = None
+        self.down_reference = None
+
+        self.up_threshold = None
+        self.down_threshold = None
+        self.vertical_calibration_complete = False
+        self.vertical_increases_upward = None
+
+        # Calibration capture state
+        self.calibration_target = None
+        self.horizontal_samples = []
+        self.vertical_samples = []
+        self.calibration_sample_count = 15
 
         self.get_logger().info(
             "Webcam Iris Gaze Node started."
         )
 
         self.get_logger().info(
-            "Calibration required."
+            "Calibration keys: "
+            "L=Left, C=Center, R=Right, U=Up, D=Down"
         )
 
-        self.get_logger().info(
-            "Look LEFT and press L."
-        )
-
-        self.get_logger().info(
-            "Look CENTER and press C."
-        )
-
-        self.get_logger().info(
-            "Look RIGHT and press R."
-        )
-        self.calibration_capture_target = None
-        self.calibration_capture_samples = []
-        self.calibration_sample_count = 15
-
-    # -------------------------------------------------------------
-    # Compute horizontal iris position
-    # -------------------------------------------------------------
-    def compute_iris_ratio(self, face_landmarks):
+    def compute_iris_ratios(self, face_landmarks):
 
         left_iris = face_landmarks.landmark[468]
         right_iris = face_landmarks.landmark[473]
@@ -112,89 +87,185 @@ class WebcamGazeNode(Node):
         right_inner = face_landmarks.landmark[362]
         right_outer = face_landmarks.landmark[263]
 
-        left_eye_width = (
-            left_inner.x - left_outer.x
-        )
+        left_top = face_landmarks.landmark[159]
+        left_bottom = face_landmarks.landmark[145]
 
-        right_eye_width = (
-            right_outer.x - right_inner.x
-        )
+        right_top = face_landmarks.landmark[386]
+        right_bottom = face_landmarks.landmark[374]
 
-        # Avoid division by an extremely small number.
+        left_eye_width = left_inner.x - left_outer.x
+        right_eye_width = right_outer.x - right_inner.x
+
+        left_eye_height = left_bottom.y - left_top.y
+        right_eye_height = right_bottom.y - right_top.y
+
         if (
             abs(left_eye_width) < 1e-6
             or abs(right_eye_width) < 1e-6
+            or abs(left_eye_height) < 1e-6
+            or abs(right_eye_height) < 1e-6
         ):
             return None
 
-        left_ratio = (
+        left_horizontal = (
             left_iris.x - left_outer.x
         ) / left_eye_width
 
-        right_ratio = (
+        right_horizontal = (
             right_iris.x - right_inner.x
         ) / right_eye_width
 
-        iris_ratio = (
-            left_ratio + right_ratio
+        horizontal_ratio = (
+            left_horizontal + right_horizontal
         ) / 2.0
 
-        return iris_ratio
+        left_vertical = (
+            left_iris.y - left_top.y
+        ) / left_eye_height
 
-    # -------------------------------------------------------------
-    # Save a calibration reference
-    # -------------------------------------------------------------
-    def start_calibration_capture(self, direction):
-        self.calibration_capture_target = direction
-        self.calibration_capture_samples = []
+        right_vertical = (
+            right_iris.y - right_top.y
+        ) / right_eye_height
+
+        vertical_ratio = (
+            left_vertical + right_vertical
+        ) / 2.0
+
+        return horizontal_ratio, vertical_ratio
+
+    def start_calibration(self, target):
+
+        self.calibration_target = target
+        self.horizontal_samples = []
+        self.vertical_samples = []
 
         self.get_logger().info(
-            f"Collecting {self.calibration_sample_count} samples for {direction}. "
+            f"Collecting calibration samples for {target}. "
             "Keep looking in that direction."
         )
 
-    def update_calibration_capture(self, iris_ratio):
-        if self.calibration_capture_target is None:
+    def update_calibration(
+        self,
+        horizontal_ratio,
+        vertical_ratio
+    ):
+
+        if self.calibration_target is None:
             return
 
-        if iris_ratio is None:
-            return
+        target = self.calibration_target
 
-        self.calibration_capture_samples.append(iris_ratio)
+        if target in ["LEFT", "RIGHT"]:
 
-        if len(self.calibration_capture_samples) < self.calibration_sample_count:
-            return
+            if horizontal_ratio is None:
+                return
 
-        average_ratio = (
-            sum(self.calibration_capture_samples)
-            / len(self.calibration_capture_samples)
-        )
+            self.horizontal_samples.append(
+                horizontal_ratio
+            )
 
-        direction = self.calibration_capture_target
+            if (
+                len(self.horizontal_samples)
+                < self.calibration_sample_count
+            ):
+                return
 
-        if direction == "LEFT":
-            self.left_reference = average_ratio
+            average_horizontal = (
+                sum(self.horizontal_samples)
+                / len(self.horizontal_samples)
+            )
 
-        elif direction == "CENTER":
-            self.center_reference = average_ratio
+            if target == "LEFT":
+                self.left_reference = average_horizontal
 
-        elif direction == "RIGHT":
-            self.right_reference = average_ratio
+            elif target == "RIGHT":
+                self.right_reference = average_horizontal
 
-        self.get_logger().info(
-            f"{direction} calibration captured: "
-            f"{average_ratio:.3f} "
-            f"from {len(self.calibration_capture_samples)} samples"
-        )
+            self.get_logger().info(
+                f"{target} captured: "
+                f"H={average_horizontal:.3f}"
+            )
 
-        self.calibration_capture_target = None
-        self.calibration_capture_samples = []
+        elif target in ["UP", "DOWN"]:
 
-        self.check_calibration()
-    # -------------------------------------------------------------
-    # Check whether all three references have been captured
-    # -------------------------------------------------------------
-    def check_calibration(self):
+            if vertical_ratio is None:
+                return
+
+            self.vertical_samples.append(
+                vertical_ratio
+            )
+
+            if (
+                len(self.vertical_samples)
+                < self.calibration_sample_count
+            ):
+                return
+
+            average_vertical = (
+                sum(self.vertical_samples)
+                / len(self.vertical_samples)
+            )
+
+            if target == "UP":
+                self.up_reference = average_vertical
+
+            elif target == "DOWN":
+                self.down_reference = average_vertical
+
+            self.get_logger().info(
+                f"{target} captured: "
+                f"V={average_vertical:.3f}"
+            )
+
+        elif target == "CENTER":
+
+            if (
+                horizontal_ratio is None
+                or vertical_ratio is None
+            ):
+                return
+
+            self.horizontal_samples.append(
+                horizontal_ratio
+            )
+
+            self.vertical_samples.append(
+                vertical_ratio
+            )
+
+            if (
+                len(self.horizontal_samples)
+                < self.calibration_sample_count
+            ):
+                return
+
+            average_horizontal = (
+                sum(self.horizontal_samples)
+                / len(self.horizontal_samples)
+            )
+
+            average_vertical = (
+                sum(self.vertical_samples)
+                / len(self.vertical_samples)
+            )
+
+            self.center_reference = average_horizontal
+            self.vertical_center_reference = average_vertical
+
+            self.get_logger().info(
+                "CENTER captured: "
+                f"H={average_horizontal:.3f}, "
+                f"V={average_vertical:.3f}"
+            )
+
+        self.calibration_target = None
+        self.horizontal_samples = []
+        self.vertical_samples = []
+
+        self.check_horizontal_calibration()
+        self.check_vertical_calibration()
+
+    def check_horizontal_calibration(self):
 
         if (
             self.left_reference is None
@@ -203,89 +274,141 @@ class WebcamGazeNode(Node):
         ):
             return
 
-        # Sanity check.
-        #
-        # With the current mirrored webcam image, our observed
-        # measurements should normally increase:
-        #
-        # LEFT < CENTER < RIGHT
-        #
         if not (
             self.left_reference
             < self.center_reference
             < self.right_reference
         ):
-            self.calibration_complete = False
+            self.horizontal_calibration_complete = False
 
             self.get_logger().warn(
-                "Calibration values are not ordered correctly."
-            )
-
-            self.get_logger().warn(
+                "Horizontal calibration invalid. "
                 "Expected LEFT < CENTER < RIGHT."
             )
-
-            self.get_logger().warn(
-                "Please repeat calibration using L, C and R."
-            )
-
             return
 
-        # Threshold halfway between LEFT and CENTER.
         self.left_threshold = (
             self.left_reference
             + self.center_reference
         ) / 2.0
 
-        # Threshold halfway between CENTER and RIGHT.
         self.right_threshold = (
             self.center_reference
             + self.right_reference
         ) / 2.0
 
-        self.calibration_complete = True
+        self.horizontal_calibration_complete = True
 
         self.get_logger().info(
-            "Calibration complete."
+            "Horizontal calibration complete: "
+            f"L={self.left_reference:.3f}, "
+            f"C={self.center_reference:.3f}, "
+            f"R={self.right_reference:.3f}"
+        )
+
+    def check_vertical_calibration(self):
+
+        if (
+            self.up_reference is None
+            or self.vertical_center_reference is None
+            or self.down_reference is None
+        ):
+            return
+
+        increasing_downward = (
+            self.up_reference
+            < self.vertical_center_reference
+            < self.down_reference
+        )
+
+        increasing_upward = (
+            self.down_reference
+            < self.vertical_center_reference
+            < self.up_reference
+        )
+
+        if not (
+            increasing_downward
+            or increasing_upward
+        ):
+            self.vertical_calibration_complete = False
+
+            self.get_logger().warn(
+                "Vertical calibration invalid. "
+                "CENTER must lie between UP and DOWN."
+            )
+            return
+
+        self.vertical_increases_upward = increasing_upward
+
+        self.up_threshold = (
+            self.up_reference
+            + self.vertical_center_reference
+        ) / 2.0
+
+        self.down_threshold = (
+            self.vertical_center_reference
+            + self.down_reference
+        ) / 2.0
+
+        self.vertical_calibration_complete = True
+
+        direction = (
+            "increases upward"
+            if self.vertical_increases_upward
+            else "increases downward"
         )
 
         self.get_logger().info(
-            f"LEFT={self.left_reference:.3f}, "
-            f"CENTER={self.center_reference:.3f}, "
-            f"RIGHT={self.right_reference:.3f}"
+            "Vertical calibration complete: "
+            f"U={self.up_reference:.3f}, "
+            f"C={self.vertical_center_reference:.3f}, "
+            f"D={self.down_reference:.3f}, "
+            f"signal {direction}"
         )
 
-        self.get_logger().info(
-            f"Thresholds: "
-            f"LEFT<{self.left_threshold:.3f}, "
-            f"RIGHT>{self.right_threshold:.3f}"
-        )
+    def classify_horizontal_gaze(
+        self,
+        horizontal_ratio
+    ):
 
-        self.get_logger().info(
-            "Normal gaze control enabled."
-        )
-
-    # -------------------------------------------------------------
-    # Convert iris ratio into gaze state
-    # -------------------------------------------------------------
-    def classify_gaze(self, iris_ratio):
-
-        # Don't allow gaze commands before calibration.
-        if not self.calibration_complete:
+        if not self.horizontal_calibration_complete:
             return "CALIBRATING"
 
-        if iris_ratio < self.left_threshold:
+        if horizontal_ratio < self.left_threshold:
             return "LOOKING_LEFT"
 
-        elif iris_ratio > self.right_threshold:
+        if horizontal_ratio > self.right_threshold:
             return "LOOKING_RIGHT"
 
-        else:
-            return "LOOKING_CENTER"
+        return "LOOKING_CENTER"
 
-    # -------------------------------------------------------------
-    # Main webcam callback
-    # -------------------------------------------------------------
+    def classify_vertical_gaze(
+        self,
+        vertical_ratio
+    ):
+
+        if not self.vertical_calibration_complete:
+            return "CALIBRATING"
+
+        if self.vertical_increases_upward:
+
+            if vertical_ratio > self.up_threshold:
+                return "LOOKING_UP"
+
+            if vertical_ratio < self.down_threshold:
+                return "LOOKING_DOWN"
+
+        else:
+
+            if vertical_ratio < self.up_threshold:
+                return "LOOKING_UP"
+
+            if vertical_ratio > self.down_threshold:
+                return "LOOKING_DOWN"
+
+        return "LOOKING_CENTER"
+
     def process_frame(self):
 
         ret, frame = self.cap.read()
@@ -296,7 +419,6 @@ class WebcamGazeNode(Node):
             )
             return
 
-        # Mirror webcam image.
         frame = cv2.flip(frame, 1)
 
         rgb_frame = cv2.cvtColor(
@@ -308,22 +430,19 @@ class WebcamGazeNode(Node):
             rgb_frame
         )
 
-        iris_ratio = None
-        gaze_state = "NO_FACE"
-        yaw = 0.0
+        horizontal_ratio = None
+        vertical_ratio = None
+        raw_vertical_ratio = None
 
-        # ---------------------------------------------------------
-        # Face detected
-        # ---------------------------------------------------------
+        horizontal_state = "NO_FACE"
+        vertical_state = "NO_FACE"
+
         if results.multi_face_landmarks:
 
             face_landmarks = (
                 results.multi_face_landmarks[0]
             )
 
-            # -----------------------------------------------------
-            # Iris landmarks
-            # -----------------------------------------------------
             left_iris = (
                 face_landmarks.landmark[468]
             )
@@ -332,7 +451,10 @@ class WebcamGazeNode(Node):
                 face_landmarks.landmark[473]
             )
 
-            # Convert normalized coordinates into pixels.
+            raw_vertical_ratio = (
+                left_iris.y + right_iris.y
+            ) / 2.0
+
             left_iris_x = int(
                 left_iris.x * frame.shape[1]
             )
@@ -349,9 +471,6 @@ class WebcamGazeNode(Node):
                 right_iris.y * frame.shape[0]
             )
 
-            # -----------------------------------------------------
-            # Draw yellow pupil/iris markers
-            # -----------------------------------------------------
             cv2.circle(
                 frame,
                 (left_iris_x, left_iris_y),
@@ -368,180 +487,231 @@ class WebcamGazeNode(Node):
                 -1
             )
 
-            # -----------------------------------------------------
-            # Calculate iris ratio
-            # -----------------------------------------------------
-            iris_ratio = self.compute_iris_ratio(
+            ratios = self.compute_iris_ratios(
                 face_landmarks
             )
 
-            if iris_ratio is not None:
+            if ratios is not None:
 
-                self.latest_iris_ratio = iris_ratio
+                (
+                    horizontal_ratio,
+                    vertical_ratio
+                ) = ratios
 
-                self.update_calibration_capture(
-                    iris_ratio
+                self.update_calibration(
+                    horizontal_ratio,
+                    vertical_ratio
                 )
 
-                yaw = float(iris_ratio)
-
-                gaze_state = self.classify_gaze(
-                    iris_ratio
+                horizontal_state = (
+                    self.classify_horizontal_gaze(
+                        horizontal_ratio
+                    )
                 )
 
-        # ---------------------------------------------------------
-        # Publish EyeGaze
-        # ---------------------------------------------------------
+                vertical_state = (
+                    self.classify_vertical_gaze(
+                        vertical_ratio
+                    )
+                )
 
         msg = EyeGaze()
-        msg.yaw = yaw
 
-        # Important:
-        # Do not expose LEFT/RIGHT commands while calibrating.
-        if gaze_state == "CALIBRATING":
-            msg.gaze_state = "NO_FACE"
+        if horizontal_ratio is None:
+            msg.horizontal_ratio = 0.0
         else:
-            msg.gaze_state = gaze_state
+            msg.horizontal_ratio = float(horizontal_ratio)
+
+        if vertical_ratio is None:
+            msg.vertical_ratio = 0.0
+        else:
+            msg.vertical_ratio = float(vertical_ratio)
+
+        if horizontal_state == "CALIBRATING":
+            msg.horizontal_state = "NO_FACE"
+        else:
+            msg.horizontal_state = horizontal_state
+
+        if vertical_state == "CALIBRATING":
+            msg.vertical_state = "NO_FACE"
+        else:
+            msg.vertical_state = vertical_state
 
         self.gaze_pub.publish(msg)
 
-        # ---------------------------------------------------------
-        # Display current state
-        # ---------------------------------------------------------
-
-        if self.calibration_complete:
-
-            display_state = gaze_state
-
-        else:
-
-            display_state = "CALIBRATING"
-
         cv2.putText(
             frame,
-            f"State: {display_state}",
-            (30, 50),
+            f"H State: {horizontal_state}",
+            (30, 45),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
+            0.65,
             (0, 255, 0),
             2
         )
 
-        # ---------------------------------------------------------
-        # Display iris ratio
-        # ---------------------------------------------------------
+        cv2.putText(
+            frame,
+            f"V State: {vertical_state}",
+            (30, 75),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (0, 255, 0),
+            2
+        )
 
-        if iris_ratio is not None:
-
+        if horizontal_ratio is not None:
             cv2.putText(
                 frame,
-                f"Iris ratio: {iris_ratio:.3f}",
-                (30, 90),
+                f"H ratio: {horizontal_ratio:.3f}",
+                (30, 110),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                0.7,
                 (255, 255, 0),
                 2
             )
 
-        # ---------------------------------------------------------
-        # Display calibration instructions / values
-        # ---------------------------------------------------------
-
-        if not self.calibration_complete:
-
+        if vertical_ratio is not None:
             cv2.putText(
                 frame,
-                "Calibration: L=Left C=Center R=Right",
-                (30, 130),
+                f"V ratio: {vertical_ratio:.3f}",
+                (30, 145),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (255, 255, 255),
+                0.7,
+                (255, 255, 0),
                 2
             )
 
-            left_text = (
-                "---"
-                if self.left_reference is None
-                else f"{self.left_reference:.3f}"
-            )
-
-            center_text = (
-                "---"
-                if self.center_reference is None
-                else f"{self.center_reference:.3f}"
-            )
-
-            right_text = (
-                "---"
-                if self.right_reference is None
-                else f"{self.right_reference:.3f}"
-            )
-
+        if raw_vertical_ratio is not None:
             cv2.putText(
                 frame,
-                f"L:{left_text} C:{center_text} R:{right_text}",
-                (30, 165),
+                f"Raw V: {raw_vertical_ratio:.3f}",
+                (30, 180),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 0),
+                2
+            )
+
+        left_text = (
+            "---"
+            if self.left_reference is None
+            else f"{self.left_reference:.3f}"
+        )
+
+        center_h_text = (
+            "---"
+            if self.center_reference is None
+            else f"{self.center_reference:.3f}"
+        )
+
+        right_text = (
+            "---"
+            if self.right_reference is None
+            else f"{self.right_reference:.3f}"
+        )
+
+        up_text = (
+            "---"
+            if self.up_reference is None
+            else f"{self.up_reference:.3f}"
+        )
+
+        center_v_text = (
+            "---"
+            if self.vertical_center_reference is None
+            else f"{self.vertical_center_reference:.3f}"
+        )
+
+        down_text = (
+            "---"
+            if self.down_reference is None
+            else f"{self.down_reference:.3f}"
+        )
+
+        cv2.putText(
+            frame,
+            "Calibration: L C R U D",
+            (30, 220),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255),
+            2
+        )
+
+        cv2.putText(
+            frame,
+            f"H  L:{left_text} "
+            f"C:{center_h_text} "
+            f"R:{right_text}",
+            (30, 250),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2
+        )
+
+        cv2.putText(
+            frame,
+            f"V  U:{up_text} "
+            f"C:{center_v_text} "
+            f"D:{down_text}",
+            (30, 280),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2
+        )
+
+        if self.calibration_target is not None:
+            cv2.putText(
+                frame,
+                f"Collecting: {self.calibration_target}",
+                (30, 315),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
-                (255, 255, 255),
+                (0, 255, 255),
                 2
             )
-
-            if self.calibration_capture_target is not None:
-                cv2.putText(
-                    frame,
-                    f"Collecting: {self.calibration_capture_target}",
-                    (30, 200),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2
-                )
-
-        # ---------------------------------------------------------
-        # Occasional ROS logging
-        # ---------------------------------------------------------
 
         self.frame_count += 1
 
         if (
-            iris_ratio is not None
+            horizontal_ratio is not None
+            and vertical_ratio is not None
             and self.frame_count % 10 == 0
         ):
             self.get_logger().info(
-                f"Iris ratio: {iris_ratio:.3f}"
+                f"H={horizontal_ratio:.3f}, "
+                f"V={vertical_ratio:.3f}, "
+                f"HState={horizontal_state}, "
+                f"VState={vertical_state}"
             )
-
-        # ---------------------------------------------------------
-        # Show webcam
-        # ---------------------------------------------------------
 
         cv2.imshow(
             "Webcam Iris Gaze Node",
             frame
         )
 
-        # ---------------------------------------------------------
-        # Keyboard controls
-        # ---------------------------------------------------------
-
         key = cv2.waitKey(1) & 0xFF
 
         if key == ord("l"):
-            self.start_calibration_capture("LEFT")
+            self.start_calibration("LEFT")
 
         elif key == ord("c"):
-            self.start_calibration_capture("CENTER")
+            self.start_calibration("CENTER")
 
         elif key == ord("r"):
-            self.start_calibration_capture("RIGHT")
+            self.start_calibration("RIGHT")
+
+        elif key == ord("u"):
+            self.start_calibration("UP")
+
+        elif key == ord("d"):
+            self.start_calibration("DOWN")
 
         elif key == ord("q"):
             rclpy.shutdown()
 
-    # -------------------------------------------------------------
-    # Cleanup
-    # -------------------------------------------------------------
     def destroy_node(self):
 
         if hasattr(self, "cap"):

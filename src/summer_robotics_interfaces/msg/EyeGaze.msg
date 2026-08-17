@@ -1,2 +1,5 @@
-float32 yaw
-string gaze_state
+float32 horizontal_ratio
+float32 vertical_ratio
+
+string horizontal_state
+string vertical_state
